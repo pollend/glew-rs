@@ -1,6 +1,6 @@
 use std::borrow::{Borrow, BorrowMut};
 use itertools::{Itertools, join};
-use khronos_registry_parse::gl::{Command, Enum, Enums, EnumsChild, ExtensionChild, InterfaceItem, RegistryChild};
+use khronos_registry_parse::gl::{Command, CommandParam, Enum, Enums, EnumsChild, ExtensionChild, InterfaceItem, RegistryChild};
 use nom::branch::alt;
 use nom::bytes::complete::tag;
 use nom::character::complete::{char, hex_digit1, one_of};
@@ -8,10 +8,11 @@ use nom::combinator::{complete, map, map_parser, map_res, opt, recognize, value}
 use nom::multi::{many0, many1};
 use nom::sequence::{preceded, terminated, tuple};
 use nom::{Finish, IResult};
-use proc_macro2::{Ident, Span, TokenStream};
-use quote::{format_ident, quote, ToTokens};
+use proc_macro2::{Group, Ident, Punct, Spacing, Span, TokenStream};
+use quote::{format_ident, quote, TokenStreamExt, ToTokens};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
+use std::fmt::Display;
 use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
@@ -25,6 +26,58 @@ pub enum Constant {
         number: String
     },
     Hex(String),
+}
+
+struct Argument {
+    parameter_type: String,
+    parameter: String
+}
+
+
+impl Argument {
+    fn arguments(cmd: &Command) -> Vec<Argument> {
+        cmd.params.iter().map(|p| {
+            // let parameter = format_ident!("_{}",  p.definition.name.clone()).to_token_stream();
+            let stage_type = p.group.as_ref().or_else(|| p.definition.type_name.as_ref()).clone();
+            let parameter_type =  match stage_type.map_or(None, |a| { Some(a.as_str())}) {
+                Some("struct _cl_context") => "CLContext".to_string(),
+                Some("struct _cl_event") => "CLEvent".to_string(),
+                Some(i) => i.to_string(),
+                None => "GLvoid".to_string(),
+            };
+            Argument {
+                parameter_type,
+                parameter: format!("_{}", p.definition.name.clone())
+            }
+        }).collect()
+    }
+}
+
+
+impl quote::ToTokens for Argument {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        tokens.append(Ident::new(self.parameter.as_str(), Span::call_site()));
+        tokens.append(Punct::new(':', Spacing::Alone));
+        tokens.append(Ident::new(self.parameter_type.as_str(), Span::call_site()));
+    }
+}
+
+impl quote::ToTokens for Constant {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        match *self {
+            Constant::Number { ref sign, ref number}  => {
+                let number = interleave_number('_', 4, number.as_str());
+                syn::LitInt::new(&format!("{}{}", match sign.as_ref() {
+                    None => { "" }
+                    Some(res) => {res}
+                }, number), Span::call_site()).to_tokens(tokens);
+            }
+            Constant::Hex(ref n) => {
+                let number = interleave_number('_', 4, n);
+                syn::LitInt::new(&format!("0x{}", number), Span::call_site()).to_tokens(tokens);
+            }
+        }
+    }
 }
 
 
@@ -86,23 +139,6 @@ fn interleave_number(symbol: char, count: usize, n: &str) -> String {
     number.chars().rev().collect()
 }
 
-impl quote::ToTokens for Constant {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        match *self {
-            Constant::Number { ref sign, ref number}  => {
-                let number = interleave_number('_', 4, number.as_str());
-                syn::LitInt::new(&format!("{}{}", match sign.as_ref() {
-                    None => { "" }
-                    Some(res) => {res}
-                }, number), Span::call_site()).to_tokens(tokens);
-            }
-            Constant::Hex(ref n) => {
-                let number = interleave_number('_', 4, n);
-                syn::LitInt::new(&format!("0x{}", number), Span::call_site()).to_tokens(tokens);
-            }
-        }
-    }
-}
 
 pub fn write_source_code<P: AsRef<Path>>(headers_dir: &Path, src_dir: P) {
     let gl_xml = headers_dir.join("xml/gl.xml");
@@ -110,29 +146,7 @@ pub fn write_source_code<P: AsRef<Path>>(headers_dir: &Path, src_dir: P) {
     let wgl_xml = headers_dir.join("xml/wgl.xml");
 
     write_gl( headers_dir, PathBuf::from(src_dir.as_ref()));
-
-    // write_part_code(&gl_xml, {
-    //     let mut gl_path = PathBuf::from(src_dir.as_ref());
-    //     gl_path.push("gl");
-    //     gl_path
-    // });
-    // write_part_code(&glx_xml, {
-    //     let mut gl_path = PathBuf::from(src_dir.as_ref());
-    //     gl_path.push("glx");
-    //     gl_path
-    // });
-    // write_part_code(&wgl_xml, {
-    //     let mut gl_path = PathBuf::from(src_dir.as_ref());
-    //     gl_path.push("wgl");
-    //     gl_path
-    // });
 }
-//
-// impl Hash for Enum {
-//     fn hash<H: Hasher>(&self, state: &mut H) {
-//         self.name.hash(state);
-//     }
-// }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct _Enum(Enum);
@@ -143,28 +157,13 @@ impl Hash for _Enum {
     }
 }
 
-// #[derive(Debug, Clone, PartialEq, Eq)]
-// pub struct _Command(Command);
-//
-// impl Default for _Command {
-//     fn default() -> Self {
-//         todo!()
-//     }
-// }
-//
-// impl Hash for _Command {
-//     fn hash<H: Hasher>(&self, state: &mut H) {
-//         self.0.proto.name.hash(state)
-//     }
-// }
-
 
 fn write_gl(opengl_registry: &Path, output: PathBuf) {
-    let mut p = PathBuf::from(opengl_registry);
-    p.push("xml/gl.xml");
+    let mut xml_path = PathBuf::from(opengl_registry);
+    xml_path.push("xml/gl.xml");
 
     let (spec, _errors) =
-        khronos_registry_parse::gl::parse_file(p.as_path()).expect("invalid xml file");
+        khronos_registry_parse::gl::parse_file(xml_path.as_path()).expect("invalid xml file");
 
     let extensions = spec
         .0
@@ -232,7 +231,7 @@ fn write_gl(opengl_registry: &Path, output: PathBuf) {
         }
     }
 
-    // let mut command_collection: HashMap<String, HashSet<Command>> = HashMap::new();
+    let mut command_cache: HashMap<String, Vec<Command>> = HashMap::new();
     let mut command_codes: Vec<TokenStream> = Vec::new();
     for commands in spec
         .0
@@ -244,30 +243,61 @@ fn write_gl(opengl_registry: &Path, output: PathBuf) {
         .into_iter()
     {
         for c in &commands.children {
-            let type_name = format_ident!("PFN_{}", c.proto.name);
-            println!("{}", type_name);
-            let parameter_iter = c.params.iter()
-                .map(|p| {
-                    let paramter_def = &p.definition;
-                    let parameter_name: String = paramter_def.name.clone();
-                    // let void_type = "*mut c_void".to_string();
-                    // let type_name: String = paramter_def.type_name.as_ref().unwrap_or_else(|| &void_type).to_string();
-                    let paramter_type = map_type(paramter_def.type_name.as_ref());
+            command_cache.entry(c.proto.name.clone())
+                .or_insert(Vec::new())
+                .push(c.clone());
 
-                    let parameter_ident = format_ident!("_{}", parameter_name);
-                    // let type_ident = format_ident!("{}",  p.group.as_ref().unwrap_or_else(|| &final_type));
-                    quote! {
-                        #parameter_ident: #paramter_type
-                    }
-                });
-            let parameters = quote!(#(#parameter_iter,)*);
-            // let return_type = c.proto.type_name.as_ref().unwrap();
+            let args = Argument::arguments(c);
+            let method_name = format_ident!("PFN_{}", c.proto.name);
             command_codes.push(quote! {
-                #[allow(non_camel_case_types)]
-                pub type #type_name = unsafe extern "system" fn(#parameters);
+                 pub type #method_name = unsafe extern "system" fn(#(#args,)*);
             });
         }
     }
+
+
+    let mut api_functions: HashMap<String, Vec<TokenStream>> = HashMap::new();
+    for features in spec
+        .0
+        .iter()
+        .filter_map(|item| match item {
+            RegistryChild::Features(e) => Some(e),
+            _ => None,
+        })
+        .into_iter()
+    {
+        let feature_name = features.name.as_ref().unwrap();
+        for feature in &features.children {
+
+            match feature {
+                ExtensionChild::Require { items, .. } => {
+                    for it in items {
+                        match it {
+                            InterfaceItem::Enum(_) => {}
+                            InterfaceItem::Type { .. } => {}
+                            InterfaceItem::Command { name, comment } => {
+                                for cmd  in &command_cache[name] {
+                                    let method_name = format_ident!("{}", cmd.proto.name);
+                                    let command_type = format_ident!("PFN_{}", cmd.proto.name);
+                                    api_functions.entry(feature_name.clone())
+                                        .or_insert(Vec::new())
+                                        .push(quote! {
+                                            pub #method_name : crate::gl::command::#command_type
+                                        });
+                                }
+
+                            }
+                            _ => {}
+                        }
+                    }
+                },
+                ExtensionChild::Removed { .. } => {}
+                _ => {}
+            }
+        }
+
+    }
+
 
 
     let mut enum_codes: Vec<TokenStream> = enum_collection.into_iter().map(|(key, enums)|  {
@@ -323,6 +353,20 @@ fn write_gl(opengl_registry: &Path, output: PathBuf) {
         }
     }).collect();
 
+    for (loader_name, loader) in api_functions.iter() {
+
+    }
+    let api_implementation_code = api_functions.iter().map(|(key, value)| {
+        let ident = format_ident!("{}", key);
+        quote! {
+            #[derive(Clone)]
+            pub struct #ident {
+                 #(#value,)*
+            }
+        }
+    });
+
+
 
     let enum_code = quote! {
         use std::fmt;
@@ -338,13 +382,18 @@ fn write_gl(opengl_registry: &Path, output: PathBuf) {
         use std::fmt;
         use crate::gl;
         use std::ffi::c_void;
-        use gl::platform_types::*;
+        use gl::types::*;
         use gl::enums::*;
         use gl::bitflags::*;
         #(#command_codes)*
     };
 
+    let feature_code = quote! {
+        use crate::gl;
+        use gl::command::*;
 
+        #(#api_implementation_code)*
+    };
 
     let mut gl_path = PathBuf::from(output);
     gl_path.push("gl");
@@ -353,11 +402,13 @@ fn write_gl(opengl_registry: &Path, output: PathBuf) {
     let mut bitflag_file = File::create(gl_path.join("bitflags.rs")).expect("bitflags.rs");
     let mut enum_file = File::create(gl_path.join("enums.rs")).expect("enums.rs");
     let mut command_file = File::create(gl_path.join("command.rs")).expect("command.rs");
+    let mut feature_file = File::create(gl_path.join("feature.rs")).expect("feature.rs");
 
     // write!(&mut gl_enums_file, "{}", enum_code).expect("Unable to write enums.rs");
     write!(&mut bitflag_file, "{}", bitflag_code).expect("Unable to write bitflag.rs");
     write!(&mut enum_file, "{}", enum_code).expect("Unable to write bitflag.rs");
     write!(&mut command_file, "{}", command_code).expect("Unable to write command.rs");
+    write!(&mut feature_file, "{}", feature_code).expect("Unable to write command.rs");
 
     // // generate bindings
     // let mut bindings = bindgen::Builder::default();

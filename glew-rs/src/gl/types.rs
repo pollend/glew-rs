@@ -4,7 +4,7 @@ use std::os::raw::{c_char, c_double, c_float, c_int, c_uchar, c_uint};
 pub type GLenum = c_uint;
 pub type GLboolean = c_uchar;
 pub type GLbitfield = c_uint;
-pub type GLvoid = c_void;
+pub type GLvoid = *mut c_void;
 pub type GLbyte = i8;
 pub type GLubyte = u8;
 pub type GLshort = i16;
@@ -25,6 +25,10 @@ pub type GLsync = *mut c_void;
 pub type GLvdpauSurfaceNV = *mut c_void;
 pub type GLchar = c_char;
 pub type GLcharARB = c_char;
+
+pub type CLContext = *mut c_void;
+pub type CLEvent = *mut c_void;
+
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub type GLhandleARB = *mut c_void;
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
@@ -40,12 +44,39 @@ pub type GLint64EXT = i64;
 pub type GLuint64 = u64;
 pub type GLuint64EXT = u64;
 
-
-pub type GLDEBUGPROC =
-    fn(source: GLenum ,_type: GLenum,id: GLuint,severity: GLenum,length: GLsizei,message: *mut GLchar, userParam: *mut c_void);
-pub type GLDEBUGPROCARB =
-    fn(source: GLenum ,_type: GLenum,id: GLuint,severity: GLenum,length: GLsizei,message: *mut GLchar, userParam: *mut c_void);
-pub type GLDEBUGPROCAMD =
-    fn(source: GLenum ,_type: GLenum,id: GLuint,severity: GLenum,length: GLsizei,message: *mut GLchar, userParam: *mut c_void);
-pub type GLDEBUGPROCKHR =
-    fn(source: GLenum ,_type: GLenum,id: GLuint,severity: GLenum,length: GLsizei,message: *mut GLchar, userParam: *mut c_void);
+pub type GLDEBUGPROC = fn(
+    source: GLenum,
+    _type: GLenum,
+    id: GLuint,
+    severity: GLenum,
+    length: GLsizei,
+    message: *mut GLchar,
+    userParam: *mut c_void,
+);
+pub type GLDEBUGPROCARB = fn(
+    source: GLenum,
+    _type: GLenum,
+    id: GLuint,
+    severity: GLenum,
+    length: GLsizei,
+    message: *mut GLchar,
+    userParam: *mut c_void,
+);
+pub type GLDEBUGPROCAMD = fn(
+    source: GLenum,
+    _type: GLenum,
+    id: GLuint,
+    severity: GLenum,
+    length: GLsizei,
+    message: *mut GLchar,
+    userParam: *mut c_void,
+);
+pub type GLDEBUGPROCKHR = fn(
+    source: GLenum,
+    _type: GLenum,
+    id: GLuint,
+    severity: GLenum,
+    length: GLsizei,
+    message: *mut GLchar,
+    userParam: *mut c_void,
+);
