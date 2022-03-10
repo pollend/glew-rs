@@ -62,7 +62,7 @@ struct APICommand {
 }
 
 struct APIGroup {
-    commands: Vec<String>,
+    commands: HashSet<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -203,7 +203,7 @@ fn construct_context(registry: &Registry) -> Context {
                 };
                 let api_group = feature_cache
                     .entry(api)
-                    .or_insert(APIGroup { commands: vec![] });
+                    .or_insert(APIGroup { commands: HashSet::default() });
 
                 for feature in &features.children {
                     match feature {
@@ -213,7 +213,7 @@ fn construct_context(registry: &Registry) -> Context {
                                     InterfaceItem::Enum(_) => {}
                                     InterfaceItem::Type { .. } => {}
                                     InterfaceItem::Command { name, comment } => {
-                                        api_group.commands.push(name.to_string());
+                                        api_group.commands.insert(name.to_string());
                                     }
                                     _ => {}
                                 }
@@ -428,210 +428,50 @@ fn write_gl(opengl_registry: &Path, output: PathBuf) {
         }
     }).collect();
 
+    let command_tokens: Vec<TokenStream>  = context.command_cache.iter().map(|(name, command)| {
+        let ident = format_ident!("PFN_{}", name.as_str());
+        let args: Vec<TokenStream> = command.arguments.iter().map(|cmd| {
+            let arg_type = format_ident!("{}",cmd._type.as_str());
+            let name = format_ident!("_{}",cmd.name.as_str());
+            quote! { #name : #arg_type }
+        }).collect();
+        quote! {
+             pub type #ident = unsafe extern "system" fn(#(#args,)*);
+        }
+    }).collect();
 
+    let mut features_codes: Vec<TokenStream> = Vec::new();
     for (name , group) in &context.feature_cache {
+        match name {
+            APIName::OPENGL { minor, major } => {
+                let api_name = format_ident!("GL{}{}", major, minor);
+                let properties: Vec<TokenStream> = group.commands.iter().map(|cmd| {
+                    let command_name = format_ident!("{}", cmd.as_str());
+                    let command_type = format_ident!("PFN_{}", cmd.as_str());
+                    quote! {
+                        pub #command_name : crate::gl::command::#command_type
+                    }
+                }).collect();
 
+                features_codes.push(quote! {
+                    #[derive(Clone)]
+                    pub struct #api_name {
+                         #(#properties,)*
+                    }
+
+                    impl #api_name {
+                        pub fn load<F>(mut _f: F) -> Self
+                        where
+                            F: FnMut(&::std::ffi::CStr) -> *const c_void,{
+
+                        }
+                    }
+                })
+            }
+            APIName::Unknown => {
+            }
+        }
     }
-    //
-    // let extensions = spec
-    //     .0
-    //     .iter()
-    //     .filter_map(|item| match item {
-    //         RegistryChild::Extensions(e) => Some(&e.children),
-    //         _ => None,
-    //     })
-    //     .next()
-    //     .expect("extension");
-    //
-    // let mut enum_collection: HashMap<String, HashSet<_Enum>> = HashMap::new();
-    // let mut bitmask_collection: HashMap<String, HashSet<_Enum>> = HashMap::new();
-    // for enums in spec
-    //     .0
-    //     .iter()
-    //     .filter_map(|item| match item {
-    //         RegistryChild::Enums(e) => Some(e),
-    //         _ => None,
-    //     })
-    //     .into_iter()
-    // {
-    //     let is_bitmask = match &enums.enum_type {
-    //         None => false,
-    //         Some(en) => en.eq("bitmask"),
-    //     };
-    //
-    //     let base_name = enums.group.as_ref();
-    //     for child in &enums.children {
-    //         if let EnumsChild::Enum(e) = child {
-    //             let handle_enum = |name: &String, coll: &mut HashMap<String, HashSet<_Enum>>| {
-    //                 for n in name.split(',') {
-    //                     coll.entry(n.trim().to_string())
-    //                         .or_insert(HashSet::new())
-    //                         .insert(_Enum(e.clone()));
-    //                 }
-    //             };
-    //             if let Some(name) = base_name.or_else(|| e.group.as_ref()) {
-    //                 if name.as_str().eq("TransformFeedbackTokenNV") {
-    //                     continue;
-    //                 }
-    //             }
-    //
-    //             if let Some(name) = base_name {
-    //                 handle_enum(
-    //                     name,
-    //                     (if is_bitmask {
-    //                         &mut bitmask_collection
-    //                     } else {
-    //                         &mut enum_collection
-    //                     }),
-    //                 );
-    //             }
-    //             if let Some(name) = e.group.as_ref() {
-    //                 handle_enum(
-    //                     name,
-    //                     (if is_bitmask {
-    //                         &mut bitmask_collection
-    //                     } else {
-    //                         &mut enum_collection
-    //                     }),
-    //                 );
-    //             }
-    //         }
-    //     }
-    // }
-
-    // let mut command_cache: HashMap<String, Vec<Command>> = HashMap::new();
-    // let mut command_codes: Vec<TokenStream> = Vec::new();
-    // for commands in spec
-    //     .0
-    //     .iter()
-    //     .filter_map(|item| match item {
-    //         RegistryChild::Commands(e) => Some(e),
-    //         _ => None,
-    //     })
-    //     .into_iter()
-    // {
-    //     for c in &commands.children {
-    //         command_cache
-    //             .entry(c.proto.name.clone())
-    //             .or_insert(Vec::new())
-    //             .push(c.clone());
-    //
-    //         let args = Argument::arguments(c);
-    //         let method_name = format_ident!("PFN_{}", c.proto.name);
-    //         command_codes.push(quote! {
-    //              pub type #method_name = unsafe extern "system" fn(#(#args,)*);
-    //         });
-    //     }
-    // }
-    //
-    // let mut api_functions: HashMap<String, Vec<TokenStream>> = HashMap::new();
-    // for features in spec
-    //     .0
-    //     .iter()
-    //     .filter_map(|item| match item {
-    //         RegistryChild::Features(e) => Some(e),
-    //         _ => None,
-    //     })
-    //     .into_iter()
-    // {
-    //     let feature_name = features.name.as_ref().unwrap();
-    //     for feature in &features.children {
-    //         match feature {
-    //             ExtensionChild::Require { items, .. } => {
-    //                 for it in items {
-    //                     match it {
-    //                         InterfaceItem::Enum(_) => {}
-    //                         InterfaceItem::Type { .. } => {}
-    //                         InterfaceItem::Command { name, comment } => {
-    //                             println!("cmd name: {}", name.as_str());
-    //                             for cmd in &command_cache[name] {
-    //                                 let method_name = format_ident!("{}", cmd.proto.name);
-    //                                 let command_type = format_ident!("PFN_{}", cmd.proto.name);
-    //                                 api_functions
-    //                                     .entry(feature_name.clone())
-    //                                     .or_insert(Vec::new())
-    //                                     .push(quote! {
-    //                                         pub #method_name : crate::gl::command::#command_type
-    //                                     });
-    //                             }
-    //                         }
-    //                         _ => {}
-    //                     }
-    //                 }
-    //             }
-    //             ExtensionChild::Removed { .. } => {}
-    //             _ => {}
-    //         }
-    //     }
-    // }
-
-    // let mut enum_codes: Vec<TokenStream> = enum_collection
-    //     .into_iter()
-    //     .map(|(key, enums)| {
-    //         let ident = format_ident!("{}", key.as_str());
-    //         let impl_enum = enums.iter().map(|c| {
-    //             // let value = Constant::Hex(c.value.as_ref().unwrap().clone());
-    //             // let value =
-    //             let name = format_ident!("{}", &c.0.name);
-    //             let value = parse_constant(c.0.value.as_ref().unwrap())
-    //                 .finish()
-    //                 .expect("failed to parse constant")
-    //                 .1;
-    //             quote! {
-    //                 pub const #name: Self = Self(#value);
-    //             }
-    //         });
-    //         quote! {
-    //             #[repr(transparent)]
-    //             #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    //             // #[doc = #khronos_link]
-    //             pub struct #ident(pub(crate) u64);
-    //             // vk_bitflags_wrapped!(#ident, u64);
-    //             impl #ident {
-    //                 #(#impl_enum)*
-    //             }
-    //         }
-    //     })
-    //     .collect();
-    //
-    // let mut bitflag_codes: Vec<TokenStream> = bitmask_collection
-    //     .into_iter()
-    //     .map(|(key, enums)| {
-    //         let ident = format_ident!("{}", key.as_str());
-    //         let impl_enum = enums.iter().map(|c| {
-    //             // let value = Constant::Hex(c.value.as_ref().unwrap().clone());
-    //             // let value =
-    //             let name = format_ident!("{}", &c.0.name);
-    //             let value = parse_constant(c.0.value.as_ref().unwrap())
-    //                 .finish()
-    //                 .expect("failed to parse constant")
-    //                 .1;
-    //             quote! {
-    //                 pub const #name: Self = Self(#value);
-    //             }
-    //         });
-    //         quote! {
-    //             #[repr(transparent)]
-    //             #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    //             // #[doc = #khronos_link]
-    //             pub struct #ident(pub(crate) u64);
-    //             // vk_bitflags_wrapped!(#ident, u64);
-    //             impl #ident {
-    //                 #(#impl_enum)*
-    //             }
-    //         }
-    //     })
-    //     .collect();
-    //
-    // let api_implementation_code = api_functions.iter().map(|(key, value)| {
-    //     let ident = format_ident!("{}", key);
-    //     quote! {
-    //         #[derive(Clone)]
-    //         pub struct #ident {
-    //              #(#value,)*
-    //         }
-    //     }
-    // });
 
     let enum_code = quote! {
         use std::fmt;
@@ -650,14 +490,13 @@ fn write_gl(opengl_registry: &Path, output: PathBuf) {
         use gl::types::*;
         use gl::enums::*;
         use gl::bitflags::*;
-        // #(#command_codes)*
+        #(#command_tokens)*
     };
 
     let feature_code = quote! {
         use crate::gl;
         use gl::command::*;
-
-        // #(#api_implementation_code)*
+        #(#features_codes)*
     };
 
     let mut gl_path = PathBuf::from(output);
