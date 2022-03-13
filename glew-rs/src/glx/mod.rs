@@ -1,4 +1,4 @@
-mod bitflags;
-mod command;
-mod enums;
-mod types;
+pub mod bitflags;
+pub mod command;
+pub mod enums;
+pub mod types;

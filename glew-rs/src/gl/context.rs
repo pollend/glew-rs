@@ -1,13 +1,16 @@
+use std::ffi::c_void;
 use crate::gl::gl45::GL45;
 use crate::types::GLubyte;
 use libloading::Library;
 use std::sync::Arc;
 
-// use crate::glx::commands::PFN_glXGetProcAddressARB
+use crate::gl::command::PFN_glGetString;
+use crate::glx::command::PFN_glXGetProcAddressARB;
 
 #[derive(Clone)]
 pub struct LoadFn {
-    // pub get_instance_proc_addr: PFN_glXGetProcAddressARB,
+    pub get_proc_address: FnMut(&::std::ffi::CStr) -> *const c_void,
+    pub get_version_string: PFN_glGetString,
 }
 
 #[derive(Clone)]
@@ -35,7 +38,17 @@ pub struct GLContext {
     _lib_guard: Option<Arc<Library>>,
 }
 
-impl GLContext {}
+impl GLContext {
+    pub unsafe fn load(load_fn: &LoadFn) {
+
+        // GLContext {
+        //     gl45: GL45::load(load_fn),
+        //     _lib_guard: None
+        // }
+    }
+
+}
+
 
 // fn test() {
 //     let mut c: GLContext = GLContext{ gl45: (), _lib_guard: None }

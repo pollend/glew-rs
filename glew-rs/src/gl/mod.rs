@@ -4,5 +4,5 @@ pub mod context;
 pub(crate) mod enums;
 pub(crate) mod feature;
 
-mod gl45;
 mod gl41;
+mod gl45;

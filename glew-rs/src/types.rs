@@ -26,11 +26,13 @@ pub type GLvdpauSurfaceNV = *mut c_void;
 pub type GLchar = c_char;
 pub type GLcharARB = c_char;
 
+pub type HDC = c_int;
+
 pub type CLContext = *mut c_void;
 pub type CLEvent = *mut c_void;
 pub type FLOAT = c_float;
-pub type HDC = c_int;
 pub type LPVOID = *mut c_void;
+pub type GLVULKANPROCNV  = *mut c_void;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub type GLhandleARB = *mut c_void;

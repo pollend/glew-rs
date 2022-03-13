@@ -11,6 +11,8 @@ pub type GLXVideoSourceSGIX = *mut c_void;
 pub type GLXPbufferSGIX = *mut c_void;
 pub type GLXFBConfigSGIX = *mut c_void;
 pub type GLXHyperpipeConfigSGIX = *mut c_void;
+pub type GLXHyperpipeNetworkSGIX = *mut c_void;
+
 
 pub type XVisualInfo = *mut c_void;
 pub type GLXFBConfig = *mut c_void;
@@ -28,3 +30,6 @@ pub type GLXPixmap = *mut c_void;
 pub type Font = *mut c_void;
 pub type DMbuffer = *mut c_void;
 pub type DMparams = *mut c_void;
+pub type __GLXextFuncPtr = *mut c_void;
+
+pub type Status = fn(dpy: Display, overlay: Window, underlay: Window, pTransparentIndex: *const u64);

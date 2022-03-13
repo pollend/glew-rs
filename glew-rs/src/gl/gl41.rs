@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use libloading::Library;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct GL41 {
