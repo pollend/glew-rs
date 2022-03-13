@@ -1,15 +1,19 @@
+use crate::gl::gl45::GL45;
+use crate::types::GLubyte;
 use libloading::Library;
-use std::ffi::OsStr;
-use std::os::unix::raw::time_t;
-use std::ptr;
 use std::sync::Arc;
 
-struct LoadFn {}
+// use crate::glx::commands::PFN_glXGetProcAddressARB
 
 #[derive(Clone)]
-pub struct Entry {
-    // entry_gl45: crate::gl::feature::GL45,
-    // entry_gl41: crate::gl::feature::GL41,
+pub struct LoadFn {
+    // pub get_instance_proc_addr: PFN_glXGetProcAddressARB,
+}
+
+#[derive(Clone)]
+pub struct GLContext {
+    pub gl45: GL45,
+    // entry_gl41: crate::gl::feature::GLEntry41,
     // entry_gl44: crate::gl::feature::GL44,
     // entry_gl11: crate::gl::feature::GL11,
     // entry_gl40: crate::gl::feature::GL40,
@@ -31,21 +35,9 @@ pub struct Entry {
     _lib_guard: Option<Arc<Library>>,
 }
 
-impl Entry {
-    // pub unsafe fn load_from(path: impl AsRef<OsStr>) -> Result<Self, ()> {
-    //     let lib = Library::new(path)
-    //         .map_err(LoadingError::LibraryLoadFailure)
-    //         .map(Arc::new)?;
-    //
-    //     let static_fn = vk::StaticFn::load_checked(|name| {
-    //         lib.get(name.to_bytes_with_nul())
-    //             .map(|symbol| *symbol)
-    //             .unwrap_or(ptr::null_mut())
-    //     })?;
-    //
-    //     Ok(Self {
-    //         _lib_guard: Some(lib),
-    //         ..Self::from_static_fn(static_fn)
-    //     })
-    // }
-}
+impl GLContext {}
+
+// fn test() {
+//     let mut c: GLContext = GLContext{ gl45: (), _lib_guard: None }
+//     c.gl45.method();
+// }

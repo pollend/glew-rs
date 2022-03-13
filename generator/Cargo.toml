@@ -7,7 +7,7 @@ edition = "2018"
 
 [dependencies]
 khronos-registry-parse  = { git = "https://github.com/pollend/vk-parse.git", branch = "master", features=["opengl"]}
-proc-macro2 = "1.0"
+proc-macro2 = "1.0.24"
 quote = "1.0"
 nom = "7.1.0"
 itertools = "0.10"

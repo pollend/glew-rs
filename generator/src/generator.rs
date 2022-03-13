@@ -22,6 +22,9 @@ use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::slice::Iter;
+use syn::{LitByteStr, LitStr};
+use syn::spanned::Spanned;
 use syn::token::Const;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -53,6 +56,7 @@ impl Hash for APIEnum {
 struct APIArgument {
     _type: String,
     name: String,
+    is_array: bool
 }
 
 struct APICommand {
@@ -68,6 +72,7 @@ struct APIGroup {
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum APIName {
     OPENGL { minor: u16, major: u16 },
+    GLES {minor: u16, major: u16},
     Unknown,
 }
 
@@ -88,13 +93,85 @@ struct Context {
     extension_cache: HashMap<APIName, APIGroup>,
 }
 
+fn construct_const(enums: &[&APIEnum]) -> Vec<TokenStream> {
+    enums.iter().map(|c| {
+        let name = format_ident!("{}", &c.name);
+        let value = &c.constant;
+        quote! {
+                pub const #name: Self = Self(#value);
+            }
+    }).collect()
+}
+
+fn construct_arguments(args: &[APIArgument]) -> Vec<TokenStream> {
+    args.iter().map(|cmd| {
+        let arg_type = format_ident!("{}",cmd._type.as_str());
+        let name = format_ident!("_{}",cmd.name.as_str());
+        if cmd.is_array {
+            quote! { #name : *mut #arg_type }
+        } else {
+            quote! { #name : #arg_type }
+        }
+    }).collect()
+}
+
+fn build_enum_block(collection: &HashMap<String, HashSet<APIEnum>>) -> Vec<TokenStream>{
+    collection.iter().map(|(name, enums)| {
+        let e: Vec<&APIEnum> = enums.iter().collect();
+        let impl_enum: Vec<TokenStream> = construct_const(e.as_slice());
+        let ident = format_ident!("{}", &name);
+        quote! {
+            #[repr(transparent)]
+            #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+            pub struct #ident(pub(crate) u64);
+            impl #ident {
+               #(#impl_enum)*
+            }
+        }
+    }).collect()
+}
+
+fn build_bitflag_block(collection: &HashMap<String, HashSet<APIEnum>>) -> Vec<TokenStream>{
+    collection.iter().map(|(name, enums)| {
+        let e: Vec<&APIEnum> = enums.iter().collect();
+        let impl_bitflags: Vec<TokenStream> = construct_const(e.as_slice());
+        let ident = format_ident!("{}", &name);
+        quote! {
+            #[repr(transparent)]
+            #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+            pub struct #ident(pub(crate) u64);
+            impl #ident {
+               #(#impl_bitflags)*
+            }
+        }
+    }).collect()
+}
+
+fn build_command_block(collection: &HashMap<String, APICommand>) -> Vec<TokenStream>{
+    collection.iter().map(|(name, command)| {
+        let args: Vec<TokenStream> = construct_arguments(command.arguments.as_slice());
+        let ident = format_ident!("PFN_{}", name.as_str());
+        quote! {
+             #[allow(non_camel_case_types)]
+             pub type #ident = unsafe extern "system" fn(#(#args,)*);
+        }
+    }).collect()
+}
+
+fn map_return_type(arg_type: Option<&str>) -> &str{
+ ""
+}
+
+fn map_arg_type(arg_type: Option<&str>) -> &str{
+ ""
+}
 fn construct_context(registry: &Registry) -> Context {
     let mut command_cache: HashMap<String, APICommand> = HashMap::default();
     let mut feature_cache: HashMap<APIName, APIGroup> = HashMap::default();
     let mut extension_cache: HashMap<APIName, APIGroup> = HashMap::default();
 
     let mut enum_cache: HashMap<String, HashSet<APIEnum>> = HashMap::default();
-    let mut bitmap_cache: HashMap<String, HashSet<APIEnum>> = HashMap::default();
+    let mut bitflag_cache: HashMap<String, HashSet<APIEnum>> = HashMap::default();
 
     for enums in registry
         .0
@@ -116,9 +193,14 @@ fn construct_context(registry: &Registry) -> Context {
                 let names = [base_name, e.group.as_ref()];
                 for nn in names.iter() {
                     if let Some(test) = nn {
+                        if test.as_str().eq("TransformFeedbackTokenNV") {
+                            // TODO: skip for now
+                            continue
+                        }
                         for n in test.split(",") {
-                            (if is_bitmask {
-                                &mut bitmap_cache
+                            // treat PathFontStyle as a bitflat
+                            (if is_bitmask || n.eq("PathFontStyle") {
+                                &mut bitflag_cache
                             } else {
                                 &mut enum_cache
                             })
@@ -154,6 +236,9 @@ fn construct_context(registry: &Registry) -> Context {
                     _return: match type_name.as_ref().map(|a| a.as_str()) {
                         Some("struct _cl_context") => Some("CLContext".to_string()),
                         Some("struct _cl_event") => Some("CLEvent".to_string()),
+                        Some("int64_t") => Some("u64".to_string()),
+                        Some("int32_t") => Some("u32".to_string()),
+                        Some("Bool") => Some("bool".to_string()),
                         Some(i) => Some(i.to_string()),
                         None => None,
                     },
@@ -162,17 +247,26 @@ fn construct_context(registry: &Registry) -> Context {
                         .params
                         .iter()
                         .map(|it| {
-                            let stage_type = it
-                                .group
-                                .as_ref()
-                                .or_else(|| it.definition.type_name.as_ref());
+                            let stage_type = (match it.group.as_ref() {
+                                None => { it.definition.type_name.as_ref() }
+                                Some(group_name) => { if(enum_cache.contains_key(group_name.as_str()) ||
+                                 bitflag_cache.contains_key(group_name.as_str())) {
+                                    Some(group_name)
+                                } else {
+                                    it.definition.type_name.as_ref()
+                                }}
+                            });
                             APIArgument {
                                 _type: match stage_type.map(|a| a.as_str()) {
                                     Some("struct _cl_context") => "CLContext".to_string(),
                                     Some("struct _cl_event") => "CLEvent".to_string(),
+                                    Some("int64_t") => "u64".to_string(),
+                                    Some("int32_t") => "u32".to_string(),
+                                    Some("Bool") => "bool".to_string(),
                                     Some(i) => i.to_string(),
                                     None => "GLvoid".to_string(),
                                 },
+                                is_array: it.len.is_some(),
                                 name: it.definition.name.clone(),
                             }
                         })
@@ -226,7 +320,7 @@ fn construct_context(registry: &Registry) -> Context {
             }
         }
     }
-    for features in registry
+    for extension in registry
         .0
         .iter()
         .filter_map(|item| match item {
@@ -234,10 +328,32 @@ fn construct_context(registry: &Registry) -> Context {
             _ => None,
         })
         .into_iter()
-    {}
+    {
+        for child_ext in &extension.children {
+            for child in &child_ext.children {
+                match child {
+                    ExtensionChild::Require { items, api, ..} => {
+                        for entry in items {
+                            match entry {
+                                InterfaceItem::Enum(_) => {}
+                                InterfaceItem::Type { .. } => {}
+                                InterfaceItem::Command { name, comment } => {
+
+                                },
+                                _ => {}
+                            }
+                        }
+                    },
+                    ExtensionChild::Removed { .. } => {},
+                    _ => {}
+                }
+            }
+
+        }
+    }
 
     Context {
-        bitmap_cache,
+        bitmap_cache: bitflag_cache,
         enum_cache,
         command_cache,
         feature_cache,
@@ -246,40 +362,6 @@ fn construct_context(registry: &Registry) -> Context {
 }
 
 struct Feature {}
-//
-// impl Argument {
-//     fn arguments(cmd: &Command) -> Vec<Argument> {
-//         cmd.params
-//             .iter()
-//             .map(|p| {
-//                 // let parameter = format_ident!("_{}",  p.definition.name.clone()).to_token_stream();
-//                 let stage_type = p
-//                     .group
-//                     .as_ref()
-//                     .or_else(|| p.definition.type_name.as_ref())
-//                     .clone();
-//                 let parameter_type = match stage_type.map_or(None, |a| Some(a.as_str())) {
-//                     Some("struct _cl_context") => "CLContext".to_string(),
-//                     Some("struct _cl_event") => "CLEvent".to_string(),
-//                     Some(i) => i.to_string(),
-//                     None => "GLvoid".to_string(),
-//                 };
-//                 Argument {
-//                     parameter_type,
-//                     parameter: format!("_{}", p.definition.name.clone()),
-//                 }
-//             })
-//             .collect()
-//     }
-// }
-//
-// impl quote::ToTokens for Argument {
-//     fn to_tokens(&self, tokens: &mut TokenStream) {
-//         tokens.append(Ident::new(self.parameter.as_str(), Span::call_site()));
-//         tokens.append(Punct::new(':', Spacing::Alone));
-//         tokens.append(Ident::new(self.parameter_type.as_str(), Span::call_site()));
-//     }
-// }
 
 impl quote::ToTokens for Constant {
     fn to_tokens(&self, tokens: &mut TokenStream) {
@@ -371,11 +453,99 @@ fn interleave_number(symbol: char, count: usize, n: &str) -> String {
 }
 
 pub fn write_source_code<P: AsRef<Path>>(headers_dir: &Path, src_dir: P) {
-    let gl_xml = headers_dir.join("xml/gl.xml");
-    let glx_xml = headers_dir.join("xml/glx.xml");
-    let wgl_xml = headers_dir.join("xml/wgl.xml");
-
     write_gl(headers_dir, PathBuf::from(src_dir.as_ref()));
+    write_glx(headers_dir, PathBuf::from(src_dir.as_ref()));
+    write_wgl(headers_dir, PathBuf::from(src_dir.as_ref()));
+}
+
+fn write_glx(opengl_registry: &Path, output: PathBuf) {
+    let mut xml_path = PathBuf::from(opengl_registry);
+    xml_path.push("xml/glx.xml");
+
+    let (spec, _errors) =
+        khronos_registry_parse::gl::parse_file(xml_path.as_path()).expect("invalid xml file");
+    let context = construct_context(&spec);
+
+    let enum_codes: Vec<TokenStream> = build_enum_block(&context.enum_cache);
+    let bitflag_codes: Vec<TokenStream> = build_bitflag_block(&context.bitmap_cache);
+    let command_codes: Vec<TokenStream> = build_command_block(&context.command_cache);
+
+    let enum_code = quote! {
+        use std::fmt;
+        #(#enum_codes)*
+    };
+
+    let bitflag_code = quote! {
+        use std::fmt;
+        #(#bitflag_codes)*
+    };
+
+    let command_code = quote! {
+        use crate::glx;
+        use std::fmt;
+        use std::ffi::c_void;
+        use crate::types::*;
+        use glx::enums::*;
+        use glx::bitflags::*;
+        use glx::types::*;
+        #(#command_codes)*
+    };
+
+    let mut glx_path = PathBuf::from(output);
+    glx_path.push("glx");
+
+    let mut bitflag_file = File::create(glx_path.join("bitflags.rs")).expect("bitflags.rs");
+    let mut enum_file = File::create(glx_path.join("enums.rs")).expect("enums.rs");
+    let mut command_file = File::create(glx_path.join("command.rs")).expect("command.rs");
+
+    write!(&mut bitflag_file, "{}", bitflag_code).expect("Unable to write bitflags.rs");
+    write!(&mut enum_file, "{}", enum_code).expect("Unable to write enums.rs");
+    write!(&mut command_file, "{}", command_code).expect("Unable to write command.rs");
+}
+
+fn write_wgl(opengl_registry: &Path, output: PathBuf) {
+    let mut xml_path = PathBuf::from(opengl_registry);
+    xml_path.push("xml/wgl.xml");
+
+    let (spec, _errors) =
+        khronos_registry_parse::gl::parse_file(xml_path.as_path()).expect("invalid xml file");
+    let context = construct_context(&spec);
+
+    let enum_codes: Vec<TokenStream> = build_enum_block(&context.enum_cache);
+    let bitflag_codes: Vec<TokenStream> = build_bitflag_block(&context.bitmap_cache);
+    let command_codes: Vec<TokenStream> = build_command_block(&context.command_cache);
+
+    let enum_code = quote! {
+        use std::fmt;
+        #(#enum_codes)*
+    };
+
+    let bitflag_code = quote! {
+        use std::fmt;
+        #(#bitflag_codes)*
+    };
+
+    let command_code = quote! {
+        use crate::wgl;
+        use std::fmt;
+        use std::ffi::c_void;
+        use crate::types::*;
+        use wgl::enums::*;
+        use wgl::bitflags::*;
+        use wgl::types::*;
+        #(#command_codes)*
+    };
+
+    let mut wgl_path = PathBuf::from(output);
+    wgl_path.push("wgl");
+
+    let mut bitflag_file = File::create(wgl_path.join("bitflags.rs")).expect("bitflags.rs");
+    let mut enum_file = File::create(wgl_path.join("enums.rs")).expect("enums.rs");
+    let mut command_file = File::create(wgl_path.join("command.rs")).expect("command.rs");
+
+    write!(&mut bitflag_file, "{}", bitflag_code).expect("Unable to write bitflags.rs");
+    write!(&mut enum_file, "{}", enum_code).expect("Unable to write enums.rs");
+    write!(&mut command_file, "{}", command_code).expect("Unable to write command.rs");
 }
 
 fn write_gl(opengl_registry: &Path, output: PathBuf) {
@@ -386,65 +556,15 @@ fn write_gl(opengl_registry: &Path, output: PathBuf) {
         khronos_registry_parse::gl::parse_file(xml_path.as_path()).expect("invalid xml file");
     let context = construct_context(&spec);
 
-    let enum_codes: Vec<TokenStream> = context.enum_cache.iter().map(|(name, enums)| {
-        let impl_enum: Vec<TokenStream> = enums.iter().map(|c| {
-            let name = format_ident!("{}", &c.name);
-            let value = &c.constant;
-            quote! {
-                pub const #name: Self = Self(#value);
-            }
-        }).collect();
-        let ident = format_ident!("{}", &name.as_str());
-        quote! {
-            #[repr(transparent)]
-            #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-            // #[doc = #khronos_link]
-            pub struct #ident(pub(crate) u64);
-            // vk_bitflags_wrapped!(#ident, u64);
-            impl #ident {
-                #(#impl_enum)*
-            }
-        }
-    }).collect();
-
-    let bitflag_codes: Vec<TokenStream>  = context.bitmap_cache.iter().map(|(name, enums)| {
-        let impl_bitflags: Vec<TokenStream> = enums.iter().map(|c| {
-            let name = format_ident!("{}", &c.name);
-            let value = &c.constant;
-            quote! {
-                pub const #name: Self = Self(#value);
-            }
-        }).collect();
-        let ident = format_ident!("{}", &name.as_str());
-        quote! {
-            #[repr(transparent)]
-            #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-            // #[doc = #khronos_link]
-            pub struct #ident(pub(crate) u64);
-            // vk_bitflags_wrapped!(#ident, u64);
-            impl #ident {
-                #(#impl_bitflags)*
-            }
-        }
-    }).collect();
-
-    let command_tokens: Vec<TokenStream>  = context.command_cache.iter().map(|(name, command)| {
-        let ident = format_ident!("PFN_{}", name.as_str());
-        let args: Vec<TokenStream> = command.arguments.iter().map(|cmd| {
-            let arg_type = format_ident!("{}",cmd._type.as_str());
-            let name = format_ident!("_{}",cmd.name.as_str());
-            quote! { #name : #arg_type }
-        }).collect();
-        quote! {
-             pub type #ident = unsafe extern "system" fn(#(#args,)*);
-        }
-    }).collect();
+    let enum_codes: Vec<TokenStream> = build_enum_block(&context.enum_cache);
+    let bitflag_codes: Vec<TokenStream> = build_bitflag_block(&context.bitmap_cache);
+    let command_codes: Vec<TokenStream> = build_command_block(&context.command_cache);
 
     let mut features_codes: Vec<TokenStream> = Vec::new();
     for (name , group) in &context.feature_cache {
         match name {
             APIName::OPENGL { minor, major } => {
-                let api_name = format_ident!("GL{}{}", major, minor);
+                let api_name = format_ident!("EntryFnGL{}{}", major, minor);
                 let properties: Vec<TokenStream> = group.commands.iter().map(|cmd| {
                     let command_name = format_ident!("{}", cmd.as_str());
                     let command_type = format_ident!("PFN_{}", cmd.as_str());
@@ -453,20 +573,46 @@ fn write_gl(opengl_registry: &Path, output: PathBuf) {
                     }
                 }).collect();
 
-                features_codes.push(quote! {
+                let impl_block: Vec<TokenStream> = group.commands.iter().map(|cmd| {
+                    let command = &context.command_cache[cmd.as_str()];
+                    let api_name = format_ident!("{}", cmd.as_str());
+                    let internal_api_catch = format_ident!("__{}", cmd.as_str());
+                    let args: Vec<TokenStream> = construct_arguments(command.arguments.as_slice());
+                    let byte_lit = LitByteStr::new(format!("{}\0", cmd.as_str()).as_bytes(), Span::call_site());
+                    let panic_message = syn::LitStr::new(format!("Unable to load {}", cmd.as_str()).as_str(), Span::call_site());
+                    quote! {
+                        #api_name : unsafe {
+                            unsafe extern "system" fn #internal_api_catch (#(#args,)*) {
+                                panic!(#panic_message)
+                            }
+                            let cname = ::std::ffi::CStr::from_bytes_with_nul_unchecked(
+                                #byte_lit
+                            );
+                             let val = _f(cname);
+                            if val.is_null() {
+                                #internal_api_catch
+                            } else {
+                                ::std::mem::transmute(val)
+                            }
+                        }
+                    }
+                }).collect();
+                let feature_block: TokenStream = quote! {
                     #[derive(Clone)]
                     pub struct #api_name {
                          #(#properties,)*
                     }
-
                     impl #api_name {
                         pub fn load<F>(mut _f: F) -> Self
                         where
-                            F: FnMut(&::std::ffi::CStr) -> *const c_void,{
-
+                            F: FnMut(&::std::ffi::CStr) -> *const c_void {
+                            Self {
+                                #(#impl_block,)*
+                            }
                         }
                     }
-                })
+                };
+                features_codes.push(feature_block);
             }
             APIName::Unknown => {
             }
@@ -484,18 +630,24 @@ fn write_gl(opengl_registry: &Path, output: PathBuf) {
     };
 
     let command_code = quote! {
-        use std::fmt;
         use crate::gl;
+        use std::fmt;
         use std::ffi::c_void;
-        use gl::types::*;
+        use crate::types::*;
         use gl::enums::*;
         use gl::bitflags::*;
-        #(#command_tokens)*
+        #(#command_codes)*
     };
 
     let feature_code = quote! {
         use crate::gl;
+        use crate::types::*;
         use gl::command::*;
+        use gl::enums::*;
+        use gl::bitflags::*;
+
+        use std::ffi::c_void;
+
         #(#features_codes)*
     };
 

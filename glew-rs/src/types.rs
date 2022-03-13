@@ -1,5 +1,5 @@
 use std::ffi::c_void;
-use std::os::raw::{c_char, c_double, c_float, c_int, c_uchar, c_uint};
+use std::os::raw::{c_char, c_double, c_float, c_int, c_long, c_uchar, c_uint, c_ulong, c_ushort};
 
 pub type GLenum = c_uint;
 pub type GLboolean = c_uchar;
@@ -28,11 +28,15 @@ pub type GLcharARB = c_char;
 
 pub type CLContext = *mut c_void;
 pub type CLEvent = *mut c_void;
+pub type FLOAT = c_float;
+pub type HDC = c_int;
+pub type LPVOID = *mut c_void;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub type GLhandleARB = *mut c_void;
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
 pub type GLhandleARB = c_uint;
+
 pub type GLhalfARB = u16;
 pub type GLfixed = i32;
 pub type GLintptr = isize;
@@ -43,6 +47,13 @@ pub type GLint64 = i64;
 pub type GLint64EXT = i64;
 pub type GLuint64 = u64;
 pub type GLuint64EXT = u64;
+
+pub type USHORT = c_ushort;
+pub type UINT = c_uint;
+pub type INT = c_int;
+pub type INT64 = c_long;
+pub type BOOL = bool;
+pub type INT32 = c_int;
 
 pub type GLDEBUGPROC = fn(
     source: GLenum,

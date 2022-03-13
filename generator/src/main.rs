@@ -1,3 +1,5 @@
+extern crate core;
+
 mod generator;
 
 use generator::write_source_code;
