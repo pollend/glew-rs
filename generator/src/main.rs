@@ -1,6 +1,8 @@
 extern crate core;
 
 mod generator;
+mod argument_parser;
+mod const_parser;
 
 use generator::write_source_code;
 use std::path::Path;
