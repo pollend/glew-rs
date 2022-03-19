@@ -8,7 +8,8 @@ use nom::{Finish, IResult};
 use nom::character::is_alphabetic;
 use nom::multi::{many0, many0_count, many1};
 use nom::sequence::{preceded, tuple};
-use crate::argument_parser::FundamentalType::SignedLongLongInt;
+use crate::argument_parser::Arg::{Alias, Fundamental, Struct};
+use crate::argument_parser::FundamentalType::{SignedLongLongInt, UnsignedLongInt};
 
 #[derive(Clone, Eq, PartialEq)]
 enum FundamentalType {
@@ -25,13 +26,15 @@ enum FundamentalType {
 #[derive(Clone, Eq, PartialEq)]
 enum Arg {
     Fundamental(FundamentalType),
+    Struct(String),
     Alias(String)
 }
 
 #[derive(Clone, Eq, PartialEq)]
 struct ArgumentDef {
+    is_const: bool,
     argument: Arg,
-    pointer: [PointerType; 5],
+    pointer: Option<Vec<PointerType>>,
     name: String
 }
 
@@ -42,8 +45,6 @@ enum PointerType{
     Normal,
     ConstPointer
 }
-
-
 
 #[test]
 fn parser_test_fundamental_type() {
@@ -58,7 +59,6 @@ fn parser_test_fundamental_type() {
         let value = parse_fundamental_type::<VerboseError<&str>>(string);
         let result = value.finish();
         assert!(result.is_err());
-
     };
 
     test_valid(" long long int", FundamentalType::SignedLongLongInt);
@@ -77,8 +77,17 @@ fn parser_test_fundamental_type() {
     test_invalid("inglong");
 }
 
+fn parse_struct_type<'a, E: ParseError<&'a str>>(
+    i: &'a str,
+) -> IResult<&'a str, &'a str, E> {
+    (map(tuple((space0, verify(recognize(alphanumeric1), |a: &str| a.eq("struct")), space0, recognize(alphanumeric1))),
+         |(_, _, _, value)| {
+             value
+         }))(i)
+}
 
-fn parse_fundamental_type<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
+
+fn parse_fundamental_type<'a, E: ParseError<&'a str>>(
     i: &'a str,
 ) -> IResult<&'a str, FundamentalType, E> {
 
@@ -91,7 +100,7 @@ fn parse_fundamental_type<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
         IntType,
     }
 
-    (context("fundamental_type",map_opt(
+    (map_opt(
     many1(alt((
             value(SymbolType::UnsignedType, tuple((space0,  verify(recognize(alphanumeric1), |a: &str| a.eq("unsigned"))))),
             value(SymbolType::SignedType, tuple((space0,  verify(recognize(alphanumeric1), |a: &str| a.eq("signed"))))),
@@ -165,7 +174,7 @@ fn parse_fundamental_type<'a, E: ParseError<&'a str> + ContextError<&'a str>>(
             }
             return None
         },
-    )))(i)
+    ))(i)
 }
 
 
@@ -189,7 +198,7 @@ fn parser_test_pointer_type() {
 fn parse_pointer_definition<'a, E: ParseError<&'a str>>(
     i: &'a str,
 ) -> IResult<&'a str, Vec<PointerType>, E> {
-    (many0(
+    (many1(
         map(tuple((space0, char('*'), opt(tag("const")))),
             |(_, _, const_type)| {
                 if (const_type.is_some()) {
@@ -216,12 +225,96 @@ fn parse_const<'a, E: ParseError<&'a str>>(
     }))(i)
 }
 
-// fn parse_argument<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str, &'a str, E> {
-//
-//     alt((
-//         tuple((parse_const, parse_ident, opt(parse_pointer_definition), parse_ident)),
-//         tuple((parse_ident, opt(parse_pointer_definition), parse_ident)),
-//         tuple((parse_const, parse_fundamental_type, opt(parse_pointer_definition), parse_ident)),
-//         tuple((parse_fundamental_type, opt(parse_pointer_definition), parse_ident)),
-//     ))
-// }
+
+#[test]
+fn parser_test_argument() {
+    let arg = |string: &str, def: ArgumentDef| {
+        let value = parse_argument::<VerboseError<&str>>(string);
+        let result = value.finish();
+        assert!(result.is_ok());
+        let value = result.unwrap().1;
+        assert!(def.argument == value.argument);
+        assert_eq!(def.is_const, value.is_const);
+        assert!(def.name.eq(value.name.as_str()));
+        match (def.pointer, value.pointer) {
+            (Some(a), Some(b)) => {
+                assert!(a.as_slice().eq(b.as_slice()))
+            },
+            (None, None) => {},
+            (_, _) => { assert!(false) }
+        }
+    };
+
+    arg("GLenum type", ArgumentDef {
+        is_const: false,
+        argument: Alias("GLenum".to_string()),
+        pointer: None,
+        name: "type".to_string()
+    });
+
+    arg("unsigned long int test1", ArgumentDef {
+        is_const: false,
+        argument: Fundamental(UnsignedLongInt),
+        pointer: None,
+        name: "test1".to_string()
+    });
+
+    arg("const GLdouble* c", ArgumentDef {
+        is_const: true,
+        argument: Alias("GLdouble".to_string()),
+        pointer: Some(vec![PointerType::Normal]),
+        name: "c".to_string()
+    });
+
+    arg("struct test* c", ArgumentDef {
+        is_const: false,
+        argument: Struct("test".to_string()),
+        pointer: Some(vec![PointerType::Normal]),
+        name: "c".to_string()
+    });
+
+    arg("GLenum** rdsdf12", ArgumentDef {
+        is_const: false,
+        argument: Alias("GLenum".to_string()),
+        pointer: Some(vec![PointerType::Normal, PointerType::Normal]),
+        name: "rdsdf12".to_string()
+    });
+
+    arg("const GLenum** rdsdf12", ArgumentDef {
+        is_const: true,
+        argument: Alias("GLenum".to_string()),
+        pointer: Some(vec![PointerType::Normal, PointerType::Normal]),
+        name: "rdsdf12".to_string()
+    });
+}
+
+
+
+fn parse_argument<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str, ArgumentDef, E> {
+    (alt((
+        map(tuple((opt(parse_const), parse_struct_type, opt(parse_pointer_definition), parse_ident)), |(const_type, struct_name, pointer_def, variable_name)| {
+            ArgumentDef {
+                is_const: const_type.is_some(),
+                argument: Struct(struct_name.to_string()),
+                pointer: pointer_def,
+                name: variable_name.to_string()
+            }
+        }),
+        map(tuple((opt(parse_const), parse_fundamental_type, opt(parse_pointer_definition), parse_ident)), |(const_type, type_def, pointer_def, variable_name)| {
+            ArgumentDef {
+                is_const: const_type.is_some(),
+                argument: Fundamental(type_def),
+                pointer: pointer_def,
+                name: variable_name.to_string()
+            }
+        }),
+        map(tuple((opt(parse_const), parse_ident, opt(parse_pointer_definition), parse_ident)), |(const_type, type_name, pointer_def, variable_name)| {
+            ArgumentDef {
+                is_const: const_type.is_some(),
+                argument: Alias(type_name.to_string()),
+                pointer: pointer_def,
+                name: variable_name.to_string()
+            }
+        })
+    )))(i)
+}
