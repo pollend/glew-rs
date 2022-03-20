@@ -129,8 +129,9 @@ impl GLContext {
         let empty_load = |str: &std::ffi::CStr| -> *const c_void { ptr::null() };
 
         let load_handler = |str: &std::ffi::CStr| -> *const c_void {
-            // (load_fn.glXGetProcAddressARB)(str.as_ptr())
-            ptr::null()
+            #[cfg(target_os = "linux")]
+            let val = (load_fn.glXGetProcAddressARB.expect("missing glXGetProcAddressARB"))(str.as_ptr() as *const u8);
+            ::std::mem::transmute(val)
         };
 
         macro_rules! load_helper {
@@ -163,7 +164,6 @@ impl GLContext {
             entry_gl12: load_helper!(version_1_2, EntryFnGL12, empty_load, load_handler),
             entry_gl11: load_helper!(version_1_1, EntryFnGL11, empty_load, load_handler),
             entry_gl10: load_helper!(version_1_0, EntryFnGL10, empty_load, load_handler),
-
             _lib_guard: guard,
         }
     }
