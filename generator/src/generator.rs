@@ -1,42 +1,34 @@
-use itertools::{join, min, Itertools};
+use itertools::Itertools;
 use khronos_registry_parse::gl::{
     Command, CommandParam, Enum, Enums, EnumsChild, ExtensionChild, InterfaceItem, Registry,
     RegistryChild,
 };
-use nom::branch::{alt, permutation};
-use nom::bytes::complete::{tag, take_while};
+use nom::branch::alt;
+use nom::bytes::complete::tag;
 use nom::character::complete::{alphanumeric1, char, hex_digit1, one_of, u16};
 use nom::combinator::{complete, map, map_parser, map_res, opt, recognize, value};
-use nom::error::{context, ParseError};
+use nom::error::{ParseError, VerboseError};
 use nom::multi::{many0, many1};
 use nom::sequence::{preceded, terminated, tuple};
-use nom::Err::Error;
+
 use nom::{Finish, IResult, Parser};
-use proc_macro2::{Group, Ident, Punct, Spacing, Span, TokenStream};
-use quote::{format_ident, quote, ToTokens, TokenStreamExt};
+use quote::{format_ident, quote, ToTokens};
 use regex::Regex;
-use std::borrow::{Borrow, BorrowMut};
-use std::cmp;
+
 use std::collections::{HashMap, HashSet};
-use std::fmt::Display;
+
 use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
+use std::os::raw::c_int;
 use std::path::{Path, PathBuf};
-use std::slice::Iter;
-use syn::__private::bool;
-use syn::spanned::Spanned;
-use syn::token::Const;
-use syn::{LitByteStr, LitStr};
+use proc_macro2::{Span, TokenStream};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Constant {
-    Number {
-        sign: Option<String>,
-        number: String,
-    },
-    Hex(String),
-}
+use syn::spanned::Spanned;
+
+use crate::const_parser::{parse_constant, Constant};
+use syn::LitByteStr;
+use crate::argument_parser::{Arg, ArgumentDef, FundamentalType, parse_argument, PointerType};
 
 #[derive(Clone, Eq)]
 struct APIEnum {
@@ -56,9 +48,9 @@ impl Hash for APIEnum {
 }
 
 struct APIArgument {
-    _type: TokenStream,
+    group: Option<String>,
     name: String,
-    is_array: bool,
+    def: ArgumentDef
 }
 
 struct APICommand {
@@ -113,13 +105,98 @@ fn construct_const(enums: &[&APIEnum]) -> Vec<TokenStream> {
 fn construct_arguments(args: &[APIArgument]) -> Vec<TokenStream> {
     args.iter()
         .map(|cmd| {
-            let arg_type = &cmd._type;
-            let name = format_ident!("_{}", cmd.name.as_str());
-            if cmd.is_array {
-                quote! { #name : *mut #arg_type }
+            let map_arg_type = |arg: &str| -> TokenStream {
+                match arg {
+                    "_cl_context" => quote! {CLContext},
+                    "_cl_event" => quote! {CLContext},
+                    "void" => quote! { std::os::raw::c_void },
+                    "int64_t" => quote! {u64},
+                    "int32_t" => quote! {u32},
+                    "Bool" => quote! {bool},
+                    "float" => quote! { f32 },
+                    i => format_ident!("{}", i).to_token_stream()
+                }
+            };
+
+            let pointer_defs: Vec<TokenStream>  = if let Some(p) = &cmd.def.pointer {
+                let mut ptrs: Vec<TokenStream> = p.iter()
+                    .map(|p| {
+                        match p {
+                            PointerType::Normal => {
+                                quote!{*mut }
+                            },
+                            PointerType::ConstPointer => {
+                                quote!{*const }
+                            }
+                        }
+                    }).collect();
+                if cmd.def.is_const && ptrs.len() > 0 {
+                    let length = ptrs.len();
+                    ptrs[length - 1] = quote! {*const };
+                }
+                ptrs
             } else {
-                quote! { #name : #arg_type }
-            }
+                vec![]
+            };
+            let type_def: TokenStream = {
+                match &cmd.def.argument {
+                    Arg::Fundamental(fund_type) => {
+                        match fund_type {
+                            FundamentalType::SignedShortInt => {
+                                quote! { std::os::raw::c_short }
+                            },
+                            FundamentalType::SignedInt => {
+                                quote! { std::os::raw::c_int }
+                            },
+                            FundamentalType::SignedLongInt => {
+                                quote! { std::os::raw::c_long }
+                            },
+                            FundamentalType::SignedLongLongInt => {
+                                quote! { std::os::raw::c_longlong }
+                            },
+                            FundamentalType::UnsignedShortInt => {
+                                quote! { std::os::raw::c_ushort }
+                            },
+                            FundamentalType::UnsignedInt => {
+                                quote! { std::os::raw::c_uint }
+                            },
+                            FundamentalType::UnsignedLongInt => {
+                                quote! { std::os::raw::c_ulong }
+                            },
+                            FundamentalType::UnsignedLongLongInt => {
+                                quote! { std::os::raw::c_ulonglong }
+                            },
+                        }
+                    }
+                    Arg::Struct(struct_type) => {
+                        let mut value = struct_type.as_str();
+                        let struct_name = map_arg_type(value);
+                        quote! { #struct_name }
+                    }
+                    Arg::Alias(alias_type) => {
+                        let mut value = alias_type.as_str();
+                        if alias_type.as_str().eq("GLenum") {
+                            if let Some(group_name) = &cmd.group {
+                                value = group_name.as_str();
+                            }
+                        }
+                        let alias_name = map_arg_type(value);
+                        quote! { #alias_name }
+                    }
+                }
+            };
+            let name = format_ident!("_{}", cmd.def.name.as_str());
+            quote! { #name : #(#pointer_defs)* #type_def }
+            // } else {
+            //     let arg_type = &cmd._type;
+            //     let name = format_ident!("_{}", cmd.name.as_str());
+            //     if cmd.is_array {
+            //         quote! { #name : *mut #arg_type }
+            //     } else {
+            //         quote! { #name : #arg_type }
+            //     }
+            // }
+
         })
         .collect()
 }
@@ -219,7 +296,7 @@ fn parse_number_major_minor(version: &str) -> (u16, u16) {
 fn construct_context(registry: &Registry) -> Context {
     let mut command_cache: HashMap<String, APICommand> = HashMap::default();
     let mut feature_cache: HashMap<APIName, APIGroup> = HashMap::default();
-    let mut extension_cache: HashMap<String, APIGroup> = HashMap::default();
+    let _extension_cache: HashMap<String, APIGroup> = HashMap::default();
 
     let mut enum_cache: HashMap<String, HashSet<APIEnum>> = HashMap::default();
     let mut bitflag_cache: HashMap<String, HashSet<APIEnum>> = HashMap::default();
@@ -296,24 +373,32 @@ fn construct_context(registry: &Registry) -> Context {
                         .params
                         .iter()
                         .map(|it| {
-                            println!("{}", it.definition.code.as_str());
 
-                            let stage_type = (match it.group.as_ref() {
-                                None => it.definition.type_name.as_ref(),
+                            let group_name = match it.group.as_ref() {
+                                None => None,
                                 Some(group_name) => {
-                                    if (enum_cache.contains_key(group_name.as_str())
-                                        || bitflag_cache.contains_key(group_name.as_str()))
+                                    if enum_cache.contains_key(group_name.as_str())
+                                        || bitflag_cache.contains_key(group_name.as_str())
                                     {
                                         Some(group_name)
                                     } else {
-                                        it.definition.type_name.as_ref()
+                                        None
                                     }
                                 }
-                            });
-                            APIArgument {
-                                _type: map_arg_type(stage_type.map(|a| a.as_str())),
-                                is_array: it.len.is_some(),
-                                name: it.definition.name.clone(),
+                            };
+                            let result = parse_argument::<VerboseError<&str>>(it.definition.code.as_str());
+                            let argument = result.finish();
+                            match argument {
+                                Ok(def) => {
+                                    APIArgument {
+                                        group: group_name.map(|i| i.clone()),
+                                        name: it.definition.name.clone(),
+                                        def: def.1
+                                    }
+                                }
+                                Err(error) => {
+                                    panic!("failed to parse {}: {}", it.definition.code, error);
+                                }
                             }
                         })
                         .collect(),
@@ -353,7 +438,7 @@ fn construct_context(registry: &Registry) -> Context {
                                     match it {
                                         InterfaceItem::Enum(_) => {}
                                         InterfaceItem::Type { .. } => {}
-                                        InterfaceItem::Command { name, comment } => {
+                                        InterfaceItem::Command { name, comment: _ } => {
                                             api_group.commands.insert(name.to_string());
                                         }
                                         _ => {}
@@ -385,12 +470,15 @@ fn construct_context(registry: &Registry) -> Context {
         for child_ext in &extension.children {
             for child in &child_ext.children {
                 match child {
-                    ExtensionChild::Require { items, api, .. } => {
+                    ExtensionChild::Require { items, api: _, .. } => {
                         for entry in items {
                             match entry {
                                 InterfaceItem::Enum(_) => {}
                                 InterfaceItem::Type { .. } => {}
-                                InterfaceItem::Command { name, comment } => {}
+                                InterfaceItem::Command {
+                                    name: _,
+                                    comment: _,
+                                } => {}
                                 _ => {}
                             }
                         }
@@ -413,39 +501,6 @@ fn construct_context(registry: &Registry) -> Context {
 
 struct Feature {}
 
-impl quote::ToTokens for Constant {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        match *self {
-            Constant::Number {
-                ref sign,
-                ref number,
-            } => {
-                let number = interleave_number('_', 4, number.as_str());
-                syn::LitInt::new(
-                    &format!(
-                        "{}{}",
-                        match sign.as_ref() {
-                            None => {
-                                ""
-                            }
-                            Some(res) => {
-                                res
-                            }
-                        },
-                        number
-                    ),
-                    Span::call_site(),
-                )
-                .to_tokens(tokens);
-            }
-            Constant::Hex(ref n) => {
-                let number = interleave_number('_', 4, n);
-                syn::LitInt::new(&format!("0x{}", number), Span::call_site()).to_tokens(tokens);
-            }
-        }
-    }
-}
-
 fn map_type(input: Option<&String>) -> TokenStream {
     match input.map_or_else(|| None, |e| Some(e.as_str())) {
         Some("struct _cl_context") => quote! {*mut c_void},
@@ -453,54 +508,6 @@ fn map_type(input: Option<&String>) -> TokenStream {
         Some(i) => format_ident!("{}", i).to_token_stream(),
         None => quote! {*mut c_void},
     }
-}
-
-fn parse_hex(input: &str) -> IResult<&str, Constant> {
-    map_res(
-        preceded(
-            alt((tag("0x"), tag("0X"))),
-            recognize(many1(terminated(
-                one_of("0123456789abcdefABCDEF"),
-                many0(char('_')),
-            ))),
-        ),
-        |out: &str| -> Result<Constant, ()> { Ok(Constant::Hex(out.to_ascii_lowercase())) },
-    )(input)
-}
-
-fn parse_number(input: &str) -> IResult<&str, Constant> {
-    map_res(
-        tuple((opt(one_of("+-")), many1(one_of("0123456789")))),
-        |(sign, number)| -> Result<Constant, ()> {
-            Ok(Constant::Number {
-                sign: sign.map(|e| format!("{}", e)),
-                number: number.into_iter().collect(),
-            })
-        },
-    )(input)
-}
-
-fn parse_constant(i: &str) -> IResult<&str, Constant> {
-    let hex = parse_hex(i);
-    let number = parse_number(i);
-    return hex.or(number);
-}
-
-
-// Interleaves a number, for example 100000 => 100_000. Mostly used to make clippy happy
-fn interleave_number(symbol: char, count: usize, n: &str) -> String {
-    let number: String = n
-        .chars()
-        .rev()
-        .enumerate()
-        .fold(String::new(), |mut acc, (idx, next)| {
-            if idx != 0 && idx % count == 0 {
-                acc.push(symbol);
-            }
-            acc.push(next);
-            acc
-        });
-    number.chars().rev().collect()
 }
 
 pub fn write_source_code<P: AsRef<Path>>(headers_dir: &Path, src_dir: P) {
