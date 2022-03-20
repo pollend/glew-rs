@@ -10,27 +10,27 @@ use std::sync::Arc;
 pub trait GL45 {
     fn entry_gl45(&self) -> &crate::gl::feature::EntryFnGL45;
 
-    fn glTextureSubImage3D(
-        &self,
-        _texture: GLuint,
-        _level: GLint,
-        _xoffset: GLint,
-        _yoffset: GLint,
-        _zoffset: GLint,
-        _width: GLsizei,
-        _height: GLsizei,
-        _depth: GLsizei,
-        _format: PixelFormat,
-        _type: PixelType,
-        _pixels: GLvoid,
-    ) {
-        unsafe {
-            (self.entry_gl45().glTextureSubImage3D)(
-                _texture, _level, _xoffset, _yoffset, _zoffset, _width, _height, _depth, _format,
-                _type, _pixels,
-            )
-        }
-    }
+    // fn glTextureSubImage3D(
+    //     &self,
+    //     _texture: GLuint,
+    //     _level: GLint,
+    //     _xoffset: GLint,
+    //     _yoffset: GLint,
+    //     _zoffset: GLint,
+    //     _width: GLsizei,
+    //     _height: GLsizei,
+    //     _depth: GLsizei,
+    //     _format: PixelFormat,
+    //     _type: PixelType,
+    //     _pixels: GLvoid,
+    // ) {
+    //     unsafe {
+    //         (self.entry_gl45().glTextureSubImage3D)(
+    //             _texture, _level, _xoffset, _yoffset, _zoffset, _width, _height, _depth, _format,
+    //             _type, _pixels,
+    //         )
+    //     }
+    // }
 }
 
 // #[derive(Clone)]

@@ -89,9 +89,12 @@ pub struct GLContext {
 }
 
 impl GL45 for GLContext {
-    fn entry(&self) -> &EntryFnGL45 {
+    fn entry_gl45(&self) -> &EntryFnGL45 {
         &self.entry_gl45
     }
+    // fn entry(&self) -> &EntryFnGL45 {
+    //     &self.entry_gl45
+    // }
 }
 
 impl GLContext {

@@ -167,7 +167,7 @@ dependencies = [
 [[package]]
 name = "khronos-registry-parse"
 version = "0.6.0"
-source = "git+https://github.com/pollend/vk-parse.git?branch=master#8892632280e5a78eada697f2bebade27a283f9dc"
+source = "git+https://github.com/pollend/vk-parse.git?branch=master#9d6e63d4bdd1f8afae407b3c080d5c9cb0a463ec"
 dependencies = [
  "xml-rs",
 ]
