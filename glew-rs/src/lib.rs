@@ -1,4 +1,6 @@
 mod entry;
+
+#[allow(warnings)]
 mod gl;
 #[cfg(target_os = "linux")]
 mod glx;

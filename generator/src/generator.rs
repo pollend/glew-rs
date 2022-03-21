@@ -17,18 +17,18 @@ use regex::Regex;
 
 use std::collections::{HashMap, HashSet};
 
+use proc_macro2::{Span, TokenStream};
 use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::os::raw::c_int;
 use std::path::{Path, PathBuf};
-use proc_macro2::{Span, TokenStream};
 
 use syn::spanned::Spanned;
 
+use crate::command_parser::{parse_argument, Arg, ArgumentDef, FundamentalType, PointerType, ProtoDef, parse_proto, ProtoReturn};
 use crate::const_parser::{parse_constant, Constant};
 use syn::LitByteStr;
-use crate::argument_parser::{Arg, ArgumentDef, FundamentalType, parse_argument, PointerType};
 
 #[derive(Clone, Eq)]
 struct APIEnum {
@@ -50,12 +50,17 @@ impl Hash for APIEnum {
 struct APIArgument {
     group: Option<String>,
     name: String,
-    def: ArgumentDef
+    def: ArgumentDef,
+}
+
+struct APIProto {
+    group: Option<String>,
+    def: ProtoDef,
 }
 
 struct APICommand {
-    _return: Option<TokenStream>,
     name: String,
+    proto: APIProto,
     arguments: Vec<APIArgument>,
 }
 
@@ -82,6 +87,7 @@ impl Hash for _Enum {
 }
 
 struct Context {
+    constant_map: HashMap<String, APIEnum>,
     bitmap_cache: HashMap<String, HashSet<APIEnum>>,
     enum_cache: HashMap<String, HashSet<APIEnum>>,
     command_cache: HashMap<String, APICommand>,
@@ -102,34 +108,64 @@ fn construct_const(enums: &[&APIEnum]) -> Vec<TokenStream> {
         .collect()
 }
 
+fn map_type(arg: &str) -> TokenStream {
+    match arg {
+        "_cl_context" => quote! {CLContext},
+        "_cl_event" => quote! {CLContext},
+        "void" => quote! { std::os::raw::c_void },
+        "int64_t" => quote! {u64},
+        "int32_t" => quote! {u32},
+        "Bool" => quote! {bool},
+        "float" => quote! { f32 },
+        i => format_ident!("{}", i).to_token_stream(),
+    }
+}
+
+fn map_fundamental_type(fundamental_type: &FundamentalType) -> TokenStream {
+    match fundamental_type {
+        FundamentalType::SignedShortInt => {
+            quote! { std::os::raw::c_short }
+        }
+        FundamentalType::SignedInt => {
+            quote! { std::os::raw::c_int }
+        }
+        FundamentalType::SignedLongInt => {
+            quote! { std::os::raw::c_long }
+        }
+        FundamentalType::SignedLongLongInt => {
+            quote! { std::os::raw::c_longlong }
+        }
+        FundamentalType::UnsignedShortInt => {
+            quote! { std::os::raw::c_ushort }
+        }
+        FundamentalType::UnsignedInt => {
+            quote! { std::os::raw::c_uint }
+        }
+        FundamentalType::UnsignedLongInt => {
+            quote! { std::os::raw::c_ulong }
+        }
+        FundamentalType::UnsignedLongLongInt => {
+            quote! { std::os::raw::c_ulonglong }
+        }
+    }
+}
+
 fn construct_arguments(args: &[APIArgument]) -> Vec<TokenStream> {
     args.iter()
         .map(|cmd| {
-            let map_arg_type = |arg: &str| -> TokenStream {
-                match arg {
-                    "_cl_context" => quote! {CLContext},
-                    "_cl_event" => quote! {CLContext},
-                    "void" => quote! { std::os::raw::c_void },
-                    "int64_t" => quote! {u64},
-                    "int32_t" => quote! {u32},
-                    "Bool" => quote! {bool},
-                    "float" => quote! { f32 },
-                    i => format_ident!("{}", i).to_token_stream()
-                }
-            };
 
-            let pointer_defs: Vec<TokenStream>  = if let Some(p) = &cmd.def.pointer {
-                let mut ptrs: Vec<TokenStream> = p.iter()
-                    .map(|p| {
-                        match p {
-                            PointerType::Normal => {
-                                quote!{*mut }
-                            },
-                            PointerType::ConstPointer => {
-                                quote!{*const }
-                            }
+            let pointer_defs: Vec<TokenStream> = if let Some(p) = &cmd.def.pointer {
+                let mut ptrs: Vec<TokenStream> = p
+                    .iter()
+                    .map(|p| match p {
+                        PointerType::Normal => {
+                            quote! {*mut }
                         }
-                    }).collect();
+                        PointerType::ConstPointer => {
+                            quote! {*const }
+                        }
+                    })
+                    .collect();
                 if cmd.def.is_const && ptrs.len() > 0 {
                     let length = ptrs.len();
                     ptrs[length - 1] = quote! {*const };
@@ -140,63 +176,26 @@ fn construct_arguments(args: &[APIArgument]) -> Vec<TokenStream> {
             };
             let type_def: TokenStream = {
                 match &cmd.def.argument {
-                    Arg::Fundamental(fund_type) => {
-                        match fund_type {
-                            FundamentalType::SignedShortInt => {
-                                quote! { std::os::raw::c_short }
-                            },
-                            FundamentalType::SignedInt => {
-                                quote! { std::os::raw::c_int }
-                            },
-                            FundamentalType::SignedLongInt => {
-                                quote! { std::os::raw::c_long }
-                            },
-                            FundamentalType::SignedLongLongInt => {
-                                quote! { std::os::raw::c_longlong }
-                            },
-                            FundamentalType::UnsignedShortInt => {
-                                quote! { std::os::raw::c_ushort }
-                            },
-                            FundamentalType::UnsignedInt => {
-                                quote! { std::os::raw::c_uint }
-                            },
-                            FundamentalType::UnsignedLongInt => {
-                                quote! { std::os::raw::c_ulong }
-                            },
-                            FundamentalType::UnsignedLongLongInt => {
-                                quote! { std::os::raw::c_ulonglong }
-                            },
-                        }
-                    }
+                    Arg::Fundamental(fund_type) => map_fundamental_type(fund_type),
                     Arg::Struct(struct_type) => {
                         let mut value = struct_type.as_str();
-                        let struct_name = map_arg_type(value);
+                        let struct_name = map_type(value);
                         quote! { #struct_name }
                     }
                     Arg::Alias(alias_type) => {
                         let mut value = alias_type.as_str();
-                        if alias_type.as_str().eq("GLenum") {
+                        if alias_type.as_str().eq("GLenum") || alias_type.as_str().eq("GLbitfield") {
                             if let Some(group_name) = &cmd.group {
                                 value = group_name.as_str();
                             }
                         }
-                        let alias_name = map_arg_type(value);
+                        let alias_name = map_type(value);
                         quote! { #alias_name }
                     }
                 }
             };
             let name = format_ident!("_{}", cmd.def.name.as_str());
             quote! { #name : #(#pointer_defs)* #type_def }
-            // } else {
-            //     let arg_type = &cmd._type;
-            //     let name = format_ident!("_{}", cmd.name.as_str());
-            //     if cmd.is_array {
-            //         quote! { #name : *mut #arg_type }
-            //     } else {
-            //         quote! { #name : #arg_type }
-            //     }
-            // }
-
         })
         .collect()
 }
@@ -205,15 +204,19 @@ fn build_enum_block(collection: &HashMap<String, HashSet<APIEnum>>) -> Vec<Token
     collection
         .iter()
         .map(|(name, enums)| {
-            let e: Vec<&APIEnum> = enums.iter().collect();
-            let impl_enum: Vec<TokenStream> = construct_const(e.as_slice());
-            let ident = format_ident!("{}", &name);
-            quote! {
-                #[repr(transparent)]
-                #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-                pub struct #ident(pub(crate) u64);
-                impl #ident {
-                   #(#impl_enum)*
+            if (name.as_str().eq("SpecialNumbers")) {
+                quote! {}
+            } else {
+                let e: Vec<&APIEnum> = enums.iter().collect();
+                let impl_enum: Vec<TokenStream> = construct_const(e.as_slice());
+                let ident = format_ident!("{}", &name);
+                quote! {
+                    #[repr(transparent)]
+                    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+                    pub struct #ident(pub(crate) std::os::raw::c_uint);
+                    impl #ident {
+                       #(#impl_enum)*
+                    }
                 }
             }
         })
@@ -230,7 +233,7 @@ fn build_bitflag_block(collection: &HashMap<String, HashSet<APIEnum>>) -> Vec<To
             quote! {
                 #[repr(transparent)]
                 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-                pub struct #ident(pub(crate) u64);
+                pub struct #ident(pub(crate) std::os::raw::c_uint);
                 impl #ident {
                    #(#impl_bitflags)*
                 }
@@ -239,47 +242,72 @@ fn build_bitflag_block(collection: &HashMap<String, HashSet<APIEnum>>) -> Vec<To
         .collect()
 }
 
+fn build_function_block(proto: &APIProto, arguments: &[APIArgument]) -> TokenStream {
+    let return_defs: Option<TokenStream> = match &proto.def.return_arg {
+        ProtoReturn::Fundamental(fund_type) => Some(map_fundamental_type(fund_type)),
+        ProtoReturn::Alias(alias_type) => {
+            let mut value = alias_type.as_str();
+            if alias_type.as_str().eq("GLenum") || alias_type.as_str().eq("GLbitfield") {
+                if let Some(group_name) = &proto.group {
+                    value = group_name.as_str();
+                }
+            }
+            if proto.def.pointer.is_none() && value.eq("void") {
+                None
+            } else {
+                Some(map_type(value))
+            }
+        }
+    };
+    let args: Vec<TokenStream> = construct_arguments(arguments);
+    // let function_name = format_ident!("{}",name);
+    match &return_defs {
+        None => {
+            quote! {
+                (#(#args,)*)
+            }
+        }
+        Some(return_arg) => {
+            let pointer_defs: Vec<TokenStream> = if let Some(p) = &proto.def.pointer {
+                let mut ptrs: Vec<TokenStream> = p
+                    .iter()
+                    .map(|p| match p {
+                        PointerType::Normal => {
+                            quote! {*mut }
+                        }
+                        PointerType::ConstPointer => {
+                            quote! {*const }
+                        }
+                    })
+                    .collect();
+                if proto.def.is_const && ptrs.len() > 0 {
+                    let length = ptrs.len();
+                    ptrs[length - 1] = quote! {*const };
+                }
+                ptrs
+            } else {
+                vec![]
+            };
+            quote! {
+                (#(#args,)*) -> #(#pointer_defs)* #return_arg
+            }
+        }
+    }
+}
+
 fn build_command_block(collection: &HashMap<String, APICommand>) -> Vec<TokenStream> {
     collection
         .iter()
         .map(|(name, command)| {
-            let args: Vec<TokenStream> = construct_arguments(command.arguments.as_slice());
+            // let args: Vec<TokenStream> = construct_arguments(command.arguments.as_slice());
             let ident = format_ident!("PFN_{}", name.as_str());
-            match &command._return {
-                None => {
-                    quote! {
-                         #[allow(non_camel_case_types)]
-                         pub type #ident = unsafe extern "system" fn(#(#args,)*);
-                    }
-                }
-                Some(return_arg) => {
-                    quote! {
-                         #[allow(non_camel_case_types)]
-                         pub type #ident = unsafe extern "system" fn(#(#args,)*) -> #return_arg;
-                    }
-                }
+            let function_def = build_function_block(&command.proto, command.arguments.as_slice());
+            quote! {
+                #[allow(non_camel_case_types)]
+                pub type #ident = unsafe extern "system" fn #function_def;
             }
         })
         .collect()
-}
-
-fn map_return_type(arg_type: Option<&str>) -> Option<TokenStream> {
-    match arg_type {
-        Some("struct _cl_context") => Some(quote! {CLContext}),
-        Some("struct _cl_event") => Some(quote! {CLEvent}),
-        Some("int64_t") => Some(quote! {u64}),
-        Some("int32_t") => Some(quote! {u32}),
-        Some("Bool") => Some(quote! {bool}),
-        Some(i) => Some(format_ident!("{}", i).to_token_stream()),
-        None => None,
-    }
-}
-fn map_arg_type(arg_type: Option<&str>) -> TokenStream {
-    let arg_type = map_return_type(arg_type);
-    match arg_type {
-        Some(e) => e,
-        None => quote! {GLvoid},
-    }
 }
 
 fn parse_number_major_minor(version: &str) -> (u16, u16) {
@@ -297,9 +325,9 @@ fn construct_context(registry: &Registry) -> Context {
     let mut command_cache: HashMap<String, APICommand> = HashMap::default();
     let mut feature_cache: HashMap<APIName, APIGroup> = HashMap::default();
     let _extension_cache: HashMap<String, APIGroup> = HashMap::default();
-
     let mut enum_cache: HashMap<String, HashSet<APIEnum>> = HashMap::default();
     let mut bitflag_cache: HashMap<String, HashSet<APIEnum>> = HashMap::default();
+    let mut constant_map: HashMap<String, APIEnum> = HashMap::default();
 
     for enums in registry
         .0
@@ -326,6 +354,14 @@ fn construct_context(registry: &Registry) -> Context {
                             continue;
                         }
                         for n in test.split(",") {
+                            let api_enum = APIEnum {
+                                name: e.name.to_string(),
+                                constant: parse_constant(e.value.as_ref().unwrap().as_str())
+                                    .finish()
+                                    .expect("failed to parse constant")
+                                    .1,
+                            };
+
                             // treat PathFontStyle as a bitflat
                             (if is_bitmask || n.eq("PathFontStyle") {
                                 &mut bitflag_cache
@@ -334,13 +370,8 @@ fn construct_context(registry: &Registry) -> Context {
                             })
                             .entry(n.trim().to_string())
                             .or_insert(HashSet::default())
-                            .insert(APIEnum {
-                                name: e.name.to_string(),
-                                constant: parse_constant(e.value.as_ref().unwrap().as_str())
-                                    .finish()
-                                    .expect("failed to parse constant")
-                                    .1,
-                            });
+                            .insert(api_enum.clone());
+                            constant_map.insert(api_enum.name.clone(), api_enum.clone());
                         }
                     }
                 }
@@ -361,19 +392,25 @@ fn construct_context(registry: &Registry) -> Context {
                 c.proto.definition.name.clone(),
                 APICommand {
                     name: c.proto.definition.name.to_string(),
-                    _return: {
-                        match c.proto.group.as_ref().map(|i| i.as_str()) {
-                            Some("String") => Some(quote! {*const char}),
-                            _ => map_return_type(
-                                c.proto.definition.type_name.as_ref().map(|i| i.as_str()),
-                            ),
-                        }
+                    proto: APIProto {
+                        def: {
+                            let result =
+                                parse_proto::<VerboseError<&str>>(c.proto.definition.code.as_str());
+                            match result.finish() {
+                                Ok(def) => {
+                                    def.1.clone()
+                                },
+                                Err(error) => {
+                                    panic!("failed to parse {}: {}", c.proto.definition.code.as_str(), error);
+                                }
+                            }
+                        },
+                        group: c.proto.group.as_ref().map(|i| i.clone())
                     },
                     arguments: c
                         .params
                         .iter()
                         .map(|it| {
-
                             let group_name = match it.group.as_ref() {
                                 None => None,
                                 Some(group_name) => {
@@ -386,16 +423,14 @@ fn construct_context(registry: &Registry) -> Context {
                                     }
                                 }
                             };
-                            let result = parse_argument::<VerboseError<&str>>(it.definition.code.as_str());
-                            let argument = result.finish();
-                            match argument {
-                                Ok(def) => {
-                                    APIArgument {
-                                        group: group_name.map(|i| i.clone()),
-                                        name: it.definition.name.clone(),
-                                        def: def.1
-                                    }
-                                }
+                            let result =
+                                parse_argument::<VerboseError<&str>>(it.definition.code.as_str());
+                            match result.finish() {
+                                Ok(def) => APIArgument {
+                                    group: group_name.map(|i| i.clone()),
+                                    name: it.definition.name.clone(),
+                                    def: def.1,
+                                },
                                 Err(error) => {
                                     panic!("failed to parse {}: {}", it.definition.code, error);
                                 }
@@ -491,6 +526,7 @@ fn construct_context(registry: &Registry) -> Context {
     }
 
     Context {
+        constant_map,
         bitmap_cache: bitflag_cache,
         enum_cache,
         command_cache,
@@ -501,14 +537,14 @@ fn construct_context(registry: &Registry) -> Context {
 
 struct Feature {}
 
-fn map_type(input: Option<&String>) -> TokenStream {
-    match input.map_or_else(|| None, |e| Some(e.as_str())) {
-        Some("struct _cl_context") => quote! {*mut c_void},
-        Some("struct _cl_event") => quote! {*mut c_void},
-        Some(i) => format_ident!("{}", i).to_token_stream(),
-        None => quote! {*mut c_void},
-    }
-}
+// fn map_type(input: Option<&String>) -> TokenStream {
+//     match input.map_or_else(|| None, |e| Some(e.as_str())) {
+//         Some("struct _cl_context") => quote! {*mut c_void},
+//         Some("struct _cl_event") => quote! {*mut c_void},
+//         Some(i) => format_ident!("{}", i).to_token_stream(),
+//         None => quote! {*mut c_void},
+//     }
+// }
 
 pub fn write_source_code<P: AsRef<Path>>(headers_dir: &Path, src_dir: P) {
     write_gl(headers_dir, PathBuf::from(src_dir.as_ref()));
@@ -522,7 +558,7 @@ fn write_glx(opengl_registry: &Path, output: PathBuf) {
 
     let (spec, _errors) =
         khronos_registry_parse::gl::parse_file(xml_path.as_path()).expect("invalid xml file");
-    let context = construct_context(&spec);
+    let mut context = construct_context(&spec);
 
     let enum_codes: Vec<TokenStream> = build_enum_block(&context.enum_cache);
     let bitflag_codes: Vec<TokenStream> = build_bitflag_block(&context.bitmap_cache);
@@ -612,7 +648,51 @@ fn write_gl(opengl_registry: &Path, output: PathBuf) {
 
     let (spec, _errors) =
         khronos_registry_parse::gl::parse_file(xml_path.as_path()).expect("invalid xml file");
-    let context = construct_context(&spec);
+    let mut context = construct_context(&spec);
+
+    // addition enum used for texture specific
+    context.enum_cache.insert("Texture".to_string(), {
+        let mut value = HashSet::new();
+        value.insert(context.constant_map.get("GL_TEXTURE_1D").unwrap().clone());
+        value.insert(
+            context
+                .constant_map
+                .get("GL_TEXTURE_1D_ARRAY")
+                .unwrap()
+                .clone(),
+        );
+        value.insert(context.constant_map.get("GL_TEXTURE_2D").unwrap().clone());
+        value.insert(
+            context
+                .constant_map
+                .get("GL_TEXTURE_2D_ARRAY")
+                .unwrap()
+                .clone(),
+        );
+        value.insert(context.constant_map.get("GL_TEXTURE_3D").unwrap().clone());
+        value.insert(
+            context
+                .constant_map
+                .get("GL_TEXTURE_CUBE_MAP")
+                .unwrap()
+                .clone(),
+        );
+        value.insert(
+            context
+                .constant_map
+                .get("GL_TEXTURE_CUBE_MAP_ARRAY")
+                .unwrap()
+                .clone(),
+        );
+        value.insert(
+            context
+                .constant_map
+                .get("GL_TEXTURE_RECTANGLE")
+                .unwrap()
+                .clone(),
+        );
+        value
+    });
 
     let enum_codes: Vec<TokenStream> = build_enum_block(&context.enum_cache);
     let bitflag_codes: Vec<TokenStream> = build_bitflag_block(&context.bitmap_cache);
@@ -638,30 +718,19 @@ fn write_gl(opengl_registry: &Path, output: PathBuf) {
                 let impl_block: Vec<TokenStream> = group.commands.iter().map(|cmd| {
                     let command = &context.command_cache[cmd.as_str()];
                     let api_name = format_ident!("{}", cmd.as_str());
-                    let internal_api_catch = format_ident!("__{}", cmd.as_str());
-                    let args: Vec<TokenStream> = construct_arguments(command.arguments.as_slice());
+                    // let args: Vec<TokenStream> = construct_arguments(command.arguments.as_slice());
                     let byte_lit = LitByteStr::new(format!("{}\0", cmd.as_str()).as_bytes(), Span::call_site());
                     let panic_message = syn::LitStr::new(format!("Unable to load {}", cmd.as_str()).as_str(), Span::call_site());
-                    let function_code = match &command._return {
-                        None => {
-                            quote! {
-                                unsafe extern "system" fn #internal_api_catch (#(#args,)*) {
-                                    panic!(#panic_message)
-                                }
-                            }
-                        }
-                        Some(return_arg) => {
-                            quote! {
-                                unsafe extern "system" fn #internal_api_catch (#(#args,)*) -> #return_arg {
-                                    panic!(#panic_message)
-                                }
-                            }
-                        }
-                    };
+
+
+                    let internal_api_catch = format_ident!("__{}", cmd.as_str());
+                    let function_def = build_function_block(&command.proto, command.arguments.as_slice());
 
                     quote! {
                         #api_name : unsafe {
-                           #function_code
+                            unsafe extern "system" fn #internal_api_catch #function_def {
+                                panic!(#panic_message)
+                            }
                             let cname = ::std::ffi::CStr::from_bytes_with_nul_unchecked(
                                 #byte_lit
                             );

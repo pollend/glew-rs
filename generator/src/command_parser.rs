@@ -1,12 +1,11 @@
 use nom::branch::alt;
 use nom::bytes::complete::{is_not, tag, take_till, take_until, take_while};
 use nom::character::complete::{alphanumeric1, char, none_of, one_of, space0, space1};
+use nom::character::{is_newline, is_space};
 use nom::combinator::{all_consuming, map, map_opt, map_res, not, opt, recognize, value, verify};
 use nom::error::{ParseError, VerboseError};
 use nom::{Finish, IResult};
-use nom::character::{is_newline, is_space};
 
-use crate::argument_parser::Arg::{Alias, Fundamental, Struct};
 use nom::multi::many1;
 use nom::sequence::tuple;
 
@@ -30,9 +29,23 @@ pub enum Arg {
 }
 
 #[derive(Clone, Eq, PartialEq)]
+pub enum ProtoReturn {
+    Fundamental(FundamentalType),
+    Alias(String),
+}
+
+#[derive(Clone, Eq, PartialEq)]
 pub struct ArgumentDef {
     pub is_const: bool,
     pub argument: Arg,
+    pub pointer: Option<Vec<PointerType>>,
+    pub name: String,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct ProtoDef {
+    pub is_const: bool,
+    pub return_arg: ProtoReturn,
     pub pointer: Option<Vec<PointerType>>,
     pub name: String,
 }
@@ -81,15 +94,14 @@ fn parser_test_fundamental_type() {
 
 fn parse_ident<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str, &'a str, E> {
     (map(
-        tuple((space0, take_till(|c|  {
-            match c {
+        tuple((
+            space0,
+            take_till(|c| match c {
                 '\t' | '\r' | '\n' | ' ' | '*' | '<' | '>' | '=' | '[' | ']' | '&' | '!' => true,
-                _ => false
-            }
-        }))),
-        |(_, identity)| {
-            identity
-        },
+                _ => false,
+            }),
+        )),
+        |(_, identity)| identity,
     ))(i)
 }
 
@@ -301,7 +313,7 @@ fn parser_test_argument() {
         "GLenum type",
         ArgumentDef {
             is_const: false,
-            argument: Alias("GLenum".to_string()),
+            argument: Arg::Alias("GLenum".to_string()),
             pointer: None,
             name: "type".to_string(),
         },
@@ -311,7 +323,7 @@ fn parser_test_argument() {
         "unsigned long int test1",
         ArgumentDef {
             is_const: false,
-            argument: Fundamental(FundamentalType::UnsignedLongInt),
+            argument: Arg::Fundamental(FundamentalType::UnsignedLongInt),
             pointer: None,
             name: "test1".to_string(),
         },
@@ -321,7 +333,7 @@ fn parser_test_argument() {
         "const GLdouble* c",
         ArgumentDef {
             is_const: true,
-            argument: Alias("GLdouble".to_string()),
+            argument: Arg::Alias("GLdouble".to_string()),
             pointer: Some(vec![PointerType::Normal]),
             name: "c".to_string(),
         },
@@ -331,7 +343,7 @@ fn parser_test_argument() {
         "struct test* c",
         ArgumentDef {
             is_const: false,
-            argument: Struct("test".to_string()),
+            argument: Arg::Struct("test".to_string()),
             pointer: Some(vec![PointerType::Normal]),
             name: "c".to_string(),
         },
@@ -341,7 +353,7 @@ fn parser_test_argument() {
         "GLenum** rdsdf12",
         ArgumentDef {
             is_const: false,
-            argument: Alias("GLenum".to_string()),
+            argument: Arg::Alias("GLenum".to_string()),
             pointer: Some(vec![PointerType::Normal, PointerType::Normal]),
             name: "rdsdf12".to_string(),
         },
@@ -351,11 +363,44 @@ fn parser_test_argument() {
         "const GLenum** rdsdf12",
         ArgumentDef {
             is_const: true,
-            argument: Alias("GLenum".to_string()),
+            argument: Arg::Alias("GLenum".to_string()),
             pointer: Some(vec![PointerType::Normal, PointerType::Normal]),
             name: "rdsdf12".to_string(),
         },
     );
+}
+
+pub fn parse_proto<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str, ProtoDef, E> {
+    (alt((
+        map(
+            tuple((
+                opt(parse_const),
+                parse_fundamental_type,
+                opt(parse_pointer_definition),
+                parse_ident,
+            )),
+            |(const_type, type_def, pointer_def, proto_name)| ProtoDef {
+                is_const: const_type.is_some(),
+                return_arg: ProtoReturn::Fundamental(type_def),
+                pointer: pointer_def,
+                name: proto_name.to_string(),
+            },
+        ),
+        map(
+            tuple((
+                opt(parse_const),
+                parse_ident,
+                opt(parse_pointer_definition),
+                parse_ident,
+            )),
+            |(const_type, struct_name, pointer_def, proto_name)| ProtoDef {
+                is_const: const_type.is_some(),
+                return_arg: ProtoReturn::Alias(struct_name.to_string()),
+                pointer: pointer_def,
+                name: proto_name.to_string(),
+            },
+        )
+    )))(i)
 }
 
 pub fn parse_argument<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str, ArgumentDef, E> {
@@ -369,7 +414,7 @@ pub fn parse_argument<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str
             )),
             |(const_type, struct_name, pointer_def, variable_name)| ArgumentDef {
                 is_const: const_type.is_some(),
-                argument: Struct(struct_name.to_string()),
+                argument: Arg::Struct(struct_name.to_string()),
                 pointer: pointer_def,
                 name: variable_name.to_string(),
             },
@@ -383,7 +428,7 @@ pub fn parse_argument<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str
             )),
             |(const_type, type_def, pointer_def, variable_name)| ArgumentDef {
                 is_const: const_type.is_some(),
-                argument: Fundamental(type_def),
+                argument: Arg::Fundamental(type_def),
                 pointer: pointer_def,
                 name: variable_name.to_string(),
             },
@@ -397,7 +442,7 @@ pub fn parse_argument<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str
             )),
             |(const_type, type_name, pointer_def, variable_name)| ArgumentDef {
                 is_const: const_type.is_some(),
-                argument: Alias(type_name.to_string()),
+                argument: Arg::Alias(type_name.to_string()),
                 pointer: pointer_def,
                 name: variable_name.to_string(),
             },

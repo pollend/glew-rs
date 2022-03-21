@@ -1,6 +1,6 @@
 extern crate core;
 
-mod argument_parser;
+mod command_parser;
 mod const_parser;
 mod generator;
 
@@ -10,7 +10,6 @@ use std::path::Path;
 use std::os::raw;
 
 fn main() {
-
     let cwd = std::env::current_dir().unwrap();
     if cwd.ends_with("generator") {
         write_source_code(Path::new("OpenGL-Registry"), "../glew-rs/src");

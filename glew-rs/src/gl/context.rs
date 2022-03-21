@@ -36,8 +36,6 @@ impl LoadEntryPoint {
     where
         F: FnMut(&::std::ffi::CStr) -> *const c_void,
     {
-        static GL_VERSION_STRING: &[u8] = b"glGetString\0";
-
         LoadEntryPoint {
             #[cfg(target_os = "windows")]
             wglGetProcAddress: Some({
@@ -54,6 +52,7 @@ impl LoadEntryPoint {
                 ::std::mem::transmute(val)
             },
             get_version_string: unsafe {
+                static GL_VERSION_STRING: &[u8] = b"glGetString\0";
                 let cname = CStr::from_bytes_with_nul_unchecked(GL_VERSION_STRING);
                 let val = _f(cname);
                 ::std::mem::transmute(val)
@@ -92,9 +91,6 @@ impl GL45 for GLContext {
     fn entry_gl45(&self) -> &EntryFnGL45 {
         &self.entry_gl45
     }
-    // fn entry(&self) -> &EntryFnGL45 {
-    //     &self.entry_gl45
-    // }
 }
 
 impl GLContext {
@@ -130,7 +126,11 @@ impl GLContext {
 
         let load_handler = |str: &std::ffi::CStr| -> *const c_void {
             #[cfg(target_os = "linux")]
-            let val = (load_fn.glXGetProcAddressARB.expect("missing glXGetProcAddressARB"))(str.as_ptr() as *const u8);
+            let val = (load_fn
+                .glXGetProcAddressARB
+                .expect("missing glXGetProcAddressARB"))(
+                str.as_ptr() as *const u8
+            );
             ::std::mem::transmute(val)
         };
 
