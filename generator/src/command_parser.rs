@@ -399,7 +399,7 @@ pub fn parse_proto<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str, P
                 pointer: pointer_def,
                 name: proto_name.to_string(),
             },
-        )
+        ),
     )))(i)
 }
 
