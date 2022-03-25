@@ -1,10 +1,10 @@
 mod entry;
 
 #[allow(warnings)]
-mod gl;
+pub mod gl;
 #[cfg(target_os = "linux")]
 mod glx;
-#[cfg(target_os = "windows")]
-mod wgl;
+// #[cfg(target_os = "windows")]
+// mod wgl;
 
-pub(crate) mod types;
+pub mod types;

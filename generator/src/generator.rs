@@ -111,6 +111,8 @@ fn construct_const(enums: &[&APIEnum]) -> Vec<TokenStream> {
         .collect()
 }
 
+
+
 fn map_type(arg: &str) -> TokenStream {
     match arg {
         "_cl_context" => quote! {CLContext},
@@ -204,45 +206,85 @@ fn construct_arguments(args: &[APIArgument]) -> Vec<TokenStream> {
 }
 
 fn build_enum_block(collection: &HashMap<String, HashSet<APIEnum>>) -> Vec<TokenStream> {
-    collection
-        .iter()
-        .map(|(name, enums)| {
-            if (name.as_str().eq("SpecialNumbers")) {
-                quote! {}
-            } else {
-                let e: Vec<&APIEnum> = enums.iter().collect();
-                let impl_enum: Vec<TokenStream> = construct_const(e.as_slice());
-                let ident = format_ident!("{}", &name);
-                quote! {
-                    #[repr(transparent)]
-                    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-                    pub struct #ident(pub(crate) std::os::raw::c_uint);
-                    impl #ident {
-                       #(#impl_enum)*
-                    }
-                }
+    let mut enum_captures: HashSet<APIEnum>  = HashSet::default();
+    for (name, group) in collection.iter() {
+        if !name.as_str().eq("SpecialNumbers") {
+            for e in group {
+                enum_captures.insert(e.clone());
+            }
+        }
+    }
+    enum_captures.iter()
+        .map(|c| {
+            let name = format_ident!("{}", &c.name);
+            let value = &c.constant;
+            quote! {
+                pub const #name: GLenum = #value;
             }
         })
         .collect()
+
+    // collection
+    //     .iter()
+    //     .map(|(name, enums)| {
+    //         if (name.as_str().eq("SpecialNumbers")) {
+    //             quote! {}
+    //         } else {
+    //             let e: Vec<&APIEnum> = enums.iter().collect();
+    //             let impl_enum: Vec<TokenStream> = e.iter()
+    //                 .map(|c| {
+    //                     let name = format_ident!("{}", &c.name);
+    //                     let value = &c.constant;
+    //                     quote! {
+    //                         pub const #name: GLenum = #value;
+    //                     }
+    //                 })
+    //                 .collect();
+    //
+    //             // let impl_enum: Vec<TokenStream> = construct_const(e.as_slice());
+    //             let ident = format_ident!("{}", &name);
+    //             quote! {
+    //                 #(#impl_enum)*
+    //             }
+    //         }
+    //     })
+    //     .collect()
 }
 
 fn build_bitflag_block(collection: &HashMap<String, HashSet<APIEnum>>) -> Vec<TokenStream> {
-    collection
-        .iter()
-        .map(|(name, enums)| {
-            let e: Vec<&APIEnum> = enums.iter().collect();
-            let impl_bitflags: Vec<TokenStream> = construct_const(e.as_slice());
-            let ident = format_ident!("{}", &name);
+    let mut enum_captures: HashSet<APIEnum>  = HashSet::default();
+    for (name, group) in collection.iter() {
+        if !name.as_str().eq("SpecialNumbers") {
+            for e in group {
+                enum_captures.insert(e.clone());
+            }
+        }
+    }
+    enum_captures.iter()
+        .map(|c| {
+            let name = format_ident!("{}", &c.name);
+            let value = &c.constant;
             quote! {
-                #[repr(transparent)]
-                #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-                pub struct #ident(pub(crate) std::os::raw::c_uint);
-                impl #ident {
-                   #(#impl_bitflags)*
-                }
+                pub const #name: GLbitfield = #value;
             }
         })
         .collect()
+    // collection
+    //     .iter()
+    //     .map(|(name, enums)| {
+    //         let e: Vec<&APIEnum> = enums.iter().collect();
+    //         let impl_bitflags: Vec<TokenStream> = construct_const(e.as_slice());
+    //         let ident = format_ident!("{}", &name);
+    //         quote! {
+    //             #[repr(transparent)]
+    //             #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    //             pub struct #ident(pub(crate) std::os::raw::c_uint);
+    //             impl #ident {
+    //                #(#impl_bitflags)*
+    //             }
+    //         }
+    //     })
+    //     .collect()
 }
 
 fn build_function_block(
@@ -821,12 +863,12 @@ fn write_gl(opengl_registry: &Path, output: PathBuf) {
     }
 
     let enum_code = quote! {
-        use std::fmt;
+        use crate::types::GLenum;
         #(#enum_codes)*
     };
 
     let bitflag_code = quote! {
-        use std::fmt;
+        use crate::types::GLbitfield;
         #(#bitflag_codes)*
     };
 

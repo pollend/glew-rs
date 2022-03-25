@@ -1,4 +1,3 @@
-use crate::gl::gl45::GL45;
 use crate::types::GLubyte;
 use libloading::Library;
 use std::cmp::min;
@@ -9,7 +8,6 @@ use std::str::Utf8Error;
 use std::sync::Arc;
 
 use crate::gl::command::PFN_glGetString;
-use crate::gl::enums::StringName;
 use crate::gl::feature::{
     EntryFnGL10, EntryFnGL11, EntryFnGL12, EntryFnGL13, EntryFnGL14, EntryFnGL15, EntryFnGL20,
     EntryFnGL21, EntryFnGL30, EntryFnGL31, EntryFnGL32, EntryFnGL33, EntryFnGL40, EntryFnGL41,
