@@ -226,6 +226,29 @@ fn build_enum_block(collection: &HashMap<String, HashSet<APIEnum>>) -> Vec<Token
         .collect()
 }
 
+fn build_enum_type_block(collection: &HashMap<String, HashSet<APIEnum>>) -> Vec<TokenStream>{
+    collection
+        .iter()
+        .map(|(name, enums)| {
+            if (name.as_str().eq("SpecialNumbers")) {
+                quote! {}
+            } else {
+                let e: Vec<&APIEnum> = enums.iter().collect();
+                let impl_enum: Vec<TokenStream> = construct_const(e.as_slice());
+                let ident = format_ident!("{}", &name);
+                quote! {
+                    #[repr(transparent)]
+                    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+                    pub struct #ident(pub(crate) std::os::raw::c_uint);
+                    impl #ident {
+                       #(#impl_enum)*
+                    }
+                }
+            }
+        })
+        .collect()
+}
+
 fn build_bitflag_block(collection: &HashMap<String, HashSet<APIEnum>>) -> Vec<TokenStream> {
     collection
         .iter()
@@ -705,7 +728,7 @@ fn write_gl(opengl_registry: &Path, output: PathBuf) {
                         let command_name = format_ident!("{}", cmd.as_str());
                         let command_type = format_ident!("PFN_{}", cmd.as_str());
                         quote! {
-                            pub #command_name : crate::gl::command::#command_type
+                            #command_name : crate::gl::command::#command_type
                         }
                     })
                     .collect();
