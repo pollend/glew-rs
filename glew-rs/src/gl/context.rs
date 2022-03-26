@@ -1,4 +1,3 @@
-use crate::gl::gl45::GL45;
 use crate::types::GLubyte;
 use libloading::Library;
 use std::cmp::min;
@@ -8,13 +7,16 @@ use std::ptr;
 use std::str::Utf8Error;
 use std::sync::Arc;
 
+
+use crate::gl::entry;
 use crate::gl::command::PFN_glGetString;
 use crate::gl::enums::StringName;
-use crate::gl::feature::{
-    EntryFnGL10, EntryFnGL11, EntryFnGL12, EntryFnGL13, EntryFnGL14, EntryFnGL15, EntryFnGL20,
-    EntryFnGL21, EntryFnGL30, EntryFnGL31, EntryFnGL32, EntryFnGL33, EntryFnGL40, EntryFnGL41,
-    EntryFnGL42, EntryFnGL43, EntryFnGL44, EntryFnGL45, EntryFnGL46,
-};
+// use crate::gl::feature::{
+//     EntryFnGL10, EntryFnGL11, EntryFnGL12, EntryFnGL13, EntryFnGL14, EntryFnGL15, EntryFnGL20,
+//     EntryFnGL21, EntryFnGL30, EntryFnGL31, EntryFnGL32, EntryFnGL33, EntryFnGL40, EntryFnGL41,
+//     EntryFnGL42, EntryFnGL43, EntryFnGL44, EntryFnGL45, EntryFnGL46,
+// };
+
 #[cfg(target_os = "linux")]
 use crate::glx::command::PFN_glXGetProcAddressARB;
 #[cfg(target_os = "windows")]
@@ -63,25 +65,26 @@ impl LoadEntryPoint {
 
 #[derive(Clone)]
 pub struct GLContext {
-    pub(crate) entry_gl46: crate::gl::feature::EntryFnGL46,
-    pub(crate) entry_gl45: crate::gl::feature::EntryFnGL45,
-    pub(crate) entry_gl44: crate::gl::feature::EntryFnGL44,
-    pub(crate) entry_gl43: crate::gl::feature::EntryFnGL43,
-    pub(crate) entry_gl42: crate::gl::feature::EntryFnGL42,
-    pub(crate) entry_gl41: crate::gl::feature::EntryFnGL41,
-    pub(crate) entry_gl40: crate::gl::feature::EntryFnGL40,
-    pub(crate) entry_gl33: crate::gl::feature::EntryFnGL33,
-    pub(crate) entry_gl32: crate::gl::feature::EntryFnGL32,
-    pub(crate) entry_gl31: crate::gl::feature::EntryFnGL31,
-    pub(crate) entry_gl30: crate::gl::feature::EntryFnGL30,
-    pub(crate) entry_gl21: crate::gl::feature::EntryFnGL21,
-    pub(crate) entry_gl20: crate::gl::feature::EntryFnGL20,
-    pub(crate) entry_gl15: crate::gl::feature::EntryFnGL15,
-    pub(crate) entry_gl14: crate::gl::feature::EntryFnGL14,
-    pub(crate) entry_gl13: crate::gl::feature::EntryFnGL13,
-    pub(crate) entry_gl12: crate::gl::feature::EntryFnGL12,
-    pub(crate) entry_gl11: crate::gl::feature::EntryFnGL11,
-    pub(crate) entry_gl10: crate::gl::feature::EntryFnGL10,
+    pub(crate) entry_gl46: crate::gl::entry::EntryGL
+    // pub(crate) entry_gl46: crate::gl::feature::EntryFnGL46,
+    // pub(crate) entry_gl45: crate::gl::feature::EntryFnGL45,
+    // pub(crate) entry_gl44: crate::gl::feature::EntryFnGL44,
+    // pub(crate) entry_gl43: crate::gl::feature::EntryFnGL43,
+    // pub(crate) entry_gl42: crate::gl::feature::EntryFnGL42,
+    // pub(crate) entry_gl41: crate::gl::feature::EntryFnGL41,
+    // pub(crate) entry_gl40: crate::gl::feature::EntryFnGL40,
+    // pub(crate) entry_gl33: crate::gl::feature::EntryFnGL33,
+    // pub(crate) entry_gl32: crate::gl::feature::EntryFnGL32,
+    // pub(crate) entry_gl31: crate::gl::feature::EntryFnGL31,
+    // pub(crate) entry_gl30: crate::gl::feature::EntryFnGL30,
+    // pub(crate) entry_gl21: crate::gl::feature::EntryFnGL21,
+    // pub(crate) entry_gl20: crate::gl::feature::EntryFnGL20,
+    // pub(crate) entry_gl15: crate::gl::feature::EntryFnGL15,
+    // pub(crate) entry_gl14: crate::gl::feature::EntryFnGL14,
+    // pub(crate) entry_gl13: crate::gl::feature::EntryFnGL13,
+    // pub(crate) entry_gl12: crate::gl::feature::EntryFnGL12,
+    // pub(crate) entry_gl11: crate::gl::feature::EntryFnGL11,
+    // pub(crate) entry_gl10: crate::gl::feature::EntryFnGL10,
 
     #[cfg(feature = "loaded")]
     _lib_guard: Option<Arc<Library>>,
