@@ -1,5 +1,5 @@
 [package]
-name = "glew-rs"
+name = "rogl"
 version = "0.1.0"
 edition = "2018"
 
@@ -33,6 +33,7 @@ gl43 = []
 gl44 = []
 gl45 = []
 gl46 = []
+
 
 [dependencies]
 libloading = { version = "0.7", optional = true }
