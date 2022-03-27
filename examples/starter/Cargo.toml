@@ -1,0 +1,8 @@
+[package]
+name = "starter"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+rogl = { path = "../../rogl", features=["loaded", "debug", "gl40", "gl33", "gl45"] }
+sdl2 = { version = "0.34" }
