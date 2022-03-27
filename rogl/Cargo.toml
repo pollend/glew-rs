@@ -1,6 +1,6 @@
 [package]
 name = "rogl"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2018"
 description = "Rust GL library (rogl): A complete gl binding built for Rust."
 authors = [
