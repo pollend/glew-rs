@@ -1,5 +1,5 @@
 use std::ffi::c_void;
-use std::os::raw::{c_char, c_double, c_float, c_int, c_long, c_uchar, c_uint, c_ulong, c_ushort};
+use std::os::raw::{c_char, c_double, c_float, c_int, c_long, c_uchar, c_uint, c_ushort};
 
 pub type GLenum = c_uint;
 pub type GLboolean = c_uchar;
@@ -57,7 +57,7 @@ pub type INT64 = c_long;
 pub type BOOL = bool;
 pub type INT32 = c_int;
 
-pub type GLDEBUGPROC = fn(
+pub type GLDEBUGPROC = unsafe extern "system" fn(
     source: GLenum,
     _type: GLenum,
     id: GLuint,
@@ -66,7 +66,7 @@ pub type GLDEBUGPROC = fn(
     message: *mut GLchar,
     userParam: *mut c_void,
 );
-pub type GLDEBUGPROCARB = fn(
+pub type GLDEBUGPROCARB = unsafe extern "system" fn(
     source: GLenum,
     _type: GLenum,
     id: GLuint,
@@ -75,7 +75,7 @@ pub type GLDEBUGPROCARB = fn(
     message: *mut GLchar,
     userParam: *mut c_void,
 );
-pub type GLDEBUGPROCAMD = fn(
+pub type GLDEBUGPROCAMD = unsafe extern "system" fn(
     source: GLenum,
     _type: GLenum,
     id: GLuint,
@@ -84,7 +84,7 @@ pub type GLDEBUGPROCAMD = fn(
     message: *mut GLchar,
     userParam: *mut c_void,
 );
-pub type GLDEBUGPROCKHR = fn(
+pub type GLDEBUGPROCKHR = unsafe extern "system" fn(
     source: GLenum,
     _type: GLenum,
     id: GLuint,

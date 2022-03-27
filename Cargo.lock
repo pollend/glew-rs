@@ -3,5 +3,5 @@
 version = 3
 
 [[package]]
-name = "glew-rs"
+name = "rogl"
 version = "0.1.0"
