@@ -6,16 +6,10 @@ use std::os::raw::c_char;
 use std::ptr;
 use std::str::Utf8Error;
 use std::sync::Arc;
+use crate::gl::feature::EntryGLFn;
 
-
-use crate::gl::entry;
 use crate::gl::command::PFN_glGetString;
 use crate::gl::enums::StringName;
-// use crate::gl::feature::{
-//     EntryFnGL10, EntryFnGL11, EntryFnGL12, EntryFnGL13, EntryFnGL14, EntryFnGL15, EntryFnGL20,
-//     EntryFnGL21, EntryFnGL30, EntryFnGL31, EntryFnGL32, EntryFnGL33, EntryFnGL40, EntryFnGL41,
-//     EntryFnGL42, EntryFnGL43, EntryFnGL44, EntryFnGL45, EntryFnGL46,
-// };
 
 #[cfg(target_os = "linux")]
 use crate::glx::command::PFN_glXGetProcAddressARB;
@@ -65,26 +59,7 @@ impl LoadEntryPoint {
 
 #[derive(Clone)]
 pub struct GLContext {
-    pub(crate) entry_gl46: crate::gl::entry::EntryGL
-    // pub(crate) entry_gl46: crate::gl::feature::EntryFnGL46,
-    // pub(crate) entry_gl45: crate::gl::feature::EntryFnGL45,
-    // pub(crate) entry_gl44: crate::gl::feature::EntryFnGL44,
-    // pub(crate) entry_gl43: crate::gl::feature::EntryFnGL43,
-    // pub(crate) entry_gl42: crate::gl::feature::EntryFnGL42,
-    // pub(crate) entry_gl41: crate::gl::feature::EntryFnGL41,
-    // pub(crate) entry_gl40: crate::gl::feature::EntryFnGL40,
-    // pub(crate) entry_gl33: crate::gl::feature::EntryFnGL33,
-    // pub(crate) entry_gl32: crate::gl::feature::EntryFnGL32,
-    // pub(crate) entry_gl31: crate::gl::feature::EntryFnGL31,
-    // pub(crate) entry_gl30: crate::gl::feature::EntryFnGL30,
-    // pub(crate) entry_gl21: crate::gl::feature::EntryFnGL21,
-    // pub(crate) entry_gl20: crate::gl::feature::EntryFnGL20,
-    // pub(crate) entry_gl15: crate::gl::feature::EntryFnGL15,
-    // pub(crate) entry_gl14: crate::gl::feature::EntryFnGL14,
-    // pub(crate) entry_gl13: crate::gl::feature::EntryFnGL13,
-    // pub(crate) entry_gl12: crate::gl::feature::EntryFnGL12,
-    // pub(crate) entry_gl11: crate::gl::feature::EntryFnGL11,
-    // pub(crate) entry_gl10: crate::gl::feature::EntryFnGL10,
+    pub(crate) entry: crate::gl::feature::EntryGLFn,
 
     #[cfg(feature = "loaded")]
     _lib_guard: Option<Arc<Library>>,
@@ -119,7 +94,6 @@ impl GLContext {
         let version_1_2 = version_1_2_1 || (major == 1 && minor >= 2);
         let version_1_1 = version_1_2 || (major == 1 && minor >= 1);
         let version_1_0 = version_1_1 || (major == 1 && minor >= 0);
-        let empty_load = |str: &std::ffi::CStr| -> *const c_void { ptr::null() };
 
         let load_handler = |str: &std::ffi::CStr| -> *const c_void {
             #[cfg(target_os = "linux")]
@@ -142,25 +116,7 @@ impl GLContext {
         }
 
         Self {
-            entry_gl46: load_helper!(version_4_6, EntryFnGL46, empty_load, load_handler),
-            entry_gl45: load_helper!(version_4_5, EntryFnGL45, empty_load, load_handler),
-            entry_gl44: load_helper!(version_4_4, EntryFnGL44, empty_load, load_handler),
-            entry_gl43: load_helper!(version_4_3, EntryFnGL43, empty_load, load_handler),
-            entry_gl42: load_helper!(version_4_2, EntryFnGL42, empty_load, load_handler),
-            entry_gl41: load_helper!(version_4_1, EntryFnGL41, empty_load, load_handler),
-            entry_gl40: load_helper!(version_4_0, EntryFnGL40, empty_load, load_handler),
-            entry_gl33: load_helper!(version_3_3, EntryFnGL33, empty_load, load_handler),
-            entry_gl32: load_helper!(version_3_2, EntryFnGL32, empty_load, load_handler),
-            entry_gl31: load_helper!(version_3_1, EntryFnGL31, empty_load, load_handler),
-            entry_gl30: load_helper!(version_3_0, EntryFnGL30, empty_load, load_handler),
-            entry_gl21: load_helper!(version_2_1, EntryFnGL21, empty_load, load_handler),
-            entry_gl20: load_helper!(version_2_0, EntryFnGL20, empty_load, load_handler),
-            entry_gl15: load_helper!(version_1_5, EntryFnGL15, empty_load, load_handler),
-            entry_gl14: load_helper!(version_1_4, EntryFnGL14, empty_load, load_handler),
-            entry_gl13: load_helper!(version_1_3, EntryFnGL13, empty_load, load_handler),
-            entry_gl12: load_helper!(version_1_2, EntryFnGL12, empty_load, load_handler),
-            entry_gl11: load_helper!(version_1_1, EntryFnGL11, empty_load, load_handler),
-            entry_gl10: load_helper!(version_1_0, EntryFnGL10, empty_load, load_handler),
+            entry: EntryGLFn::load(load_handler),
             _lib_guard: guard,
         }
     }

@@ -743,7 +743,6 @@ fn write_gl(opengl_registry: &Path, output: PathBuf) {
         order
     }) {
         let api = APIName::OPENGL { major: *major, minor: *minor};
-        println!("{},{}", *major, *minor);
         let feature = &context.feature_cache[&api];
         for extension in &feature.groups {
             match extension {
@@ -806,34 +805,38 @@ fn write_gl(opengl_registry: &Path, output: PathBuf) {
             match return_block {
                 None => {
                     quote! {
-                        pub unsafe fn #api_name(&self,#arg_block) {
+                        unsafe fn #api_name(&self,#arg_block) {
+                             (self.entry().#api_name)(#(#args,)*)
                         }
                     }
                 }
                 Some(return_block) => {
                     quote! {
-                        pub unsafe fn #api_name(&self,#arg_block){
+                         unsafe fn #api_name(&self,#arg_block) -> #return_block{
+                            (self.entry().#api_name)(#(#args,)*)
                         }
                     }
                 }
             }
-        //      -> #return_block
         }).collect();
         let api_name = format_ident!("GL{}{}", g.major, g.minor);
         let function_codes = quote! {
-              use crate::gl;
-                use std::fmt;
-                use std::ffi::c_void;
-                use crate::types::*;
-                use gl::enums::*;
-                use gl::bitflags::*;
+            use crate::gl;
+            use std::fmt;
+            use std::ffi::c_void;
+            use crate::types::*;
+            use gl::enums::*;
+            use gl::bitflags::*;
+            use crate::gl::feature::EntryGLFn;
 
-            impl #api_name {
+            pub trait #api_name {
+                unsafe fn entry(&self) -> &EntryGLFn;
+
                 #(#method_block)*
             }
         };
 
-        let mut function_file = File::create(gl_path.join(format!("gl{}{}", g.major, g.minor)).join("functions.rs")).expect("functions.rs");
+        let mut function_file = File::create(gl_path.join(format!("gl{}{}", g.major, g.minor)).join("api.rs")).expect("functions.rs");
         write!(&mut function_file, "{}", function_codes).expect("Unable to write command.rs");
 
     }
@@ -856,12 +859,11 @@ fn write_gl(opengl_registry: &Path, output: PathBuf) {
         let command_type = format_ident!("PFN_{}", name.as_str());
         quote! {
             #feature_codes
-            #command_name : crate::gl::command::#command_type
+            pub #command_name : crate::gl::command::#command_type
         }
     }).collect();
 
     let impl_block: Vec<TokenStream> = cmd_features.iter().map(|(name, features)| {
-
         let feature_codes = construct_features(features);
         let command = &context.command_cache[name.as_str()];
         let api_name = format_ident!("{}", name.as_str());
@@ -906,12 +908,12 @@ fn write_gl(opengl_registry: &Path, output: PathBuf) {
             }
         }
     }).collect();
-    let entry_code = quote! {
+    let feature_quote = quote! {
          #[derive(Clone)]
-        pub struct EntryGL {
+        pub struct EntryGLFn {
              #(#properties,)*
         }
-        impl EntryGL {
+        impl EntryGLFn {
             pub fn load<F>(mut _f: F) -> Self
                 where
                     F: FnMut(&::std::ffi::CStr) -> *const c_void {
@@ -922,132 +924,132 @@ fn write_gl(opengl_registry: &Path, output: PathBuf) {
         }
     };
 
-    let mut features_codes: Vec<TokenStream> = Vec::new();
-    for (name, group) in &context.feature_cache {
-        match name {
-            APIName::OPENGL { minor, major } => {
-                let api_name = format_ident!("EntryFnGL{}{}", major, minor);
-                let properties: Vec<TokenStream> = group
-                    .commands
-                    .iter()
-                    .map(|cmd| {
-                        let command_name = format_ident!("{}", cmd.as_str());
-                        let command_type = format_ident!("PFN_{}", cmd.as_str());
-                        quote! {
-                            #command_name : crate::gl::command::#command_type
-                        }
-                    })
-                    .collect();
-
-                let method_block: Vec<TokenStream> = group
-                    .commands
-                    .iter()
-                    .map(|cmd| {
-                        let command = &context.command_cache[cmd.as_str()];
-                        let api_name = format_ident!("{}", cmd.as_str());
-                        let (arg_block, return_block) =
-                            build_function_block(&command.proto, command.arguments.as_slice());
-
-                        let args: Vec<TokenStream> = command
-                            .arguments
-                            .iter()
-                            .map(|p| {
-                                let name = format_ident!("_{}", p.name.as_str());
-                                quote!{ #name }
-                            })
-                            .collect();
-
-                        match return_block {
-                            None => {
-                                quote! {
-                                    pub unsafe fn #api_name(&self,#arg_block) {
-                                       (self.#api_name)(#(#args,)*);
-                                    }
-                                }
-                            }
-                            Some(return_block) => {
-                                quote! {
-                                    pub unsafe fn #api_name(&self,#arg_block) -> #return_block {
-                                        (self.#api_name)(#(#args,)*)
-                                    }
-                                }
-                            }
-                        }
-                    })
-                    .collect();
-
-                let impl_block: Vec<TokenStream> = group
-                    .commands
-                    .iter()
-                    .map(|cmd| {
-                        let command = &context.command_cache[cmd.as_str()];
-                        let api_name = format_ident!("{}", cmd.as_str());
-                        let byte_lit = LitByteStr::new(
-                            format!("{}\0", cmd.as_str()).as_bytes(),
-                            Span::call_site(),
-                        );
-                        let panic_message = syn::LitStr::new(
-                            format!("Unable to load {}", cmd.as_str()).as_str(),
-                            Span::call_site(),
-                        );
-
-                        let internal_api_catch = format_ident!("__{}", cmd.as_str());
-                        let (arg_block, return_block) =
-                            build_function_block(&command.proto, command.arguments.as_slice());
-
-                        let function_block = match return_block {
-                            None => {
-                                quote! {
-                                   (#arg_block)
-                                }
-                            }
-                            Some(return_block) => {
-                                quote! { (#arg_block) -> #return_block }
-                            }
-                        };
-
-                        quote! {
-                            #api_name : unsafe {
-                                unsafe extern "system" fn #internal_api_catch #function_block {
-                                    panic!(#panic_message)
-                                }
-                                let cname = ::std::ffi::CStr::from_bytes_with_nul_unchecked(
-                                    #byte_lit
-                                );
-                                let val = _f(cname);
-                                if val.is_null() {
-                                    #internal_api_catch
-                                } else {
-                                    ::std::mem::transmute(val)
-                                }
-                            }
-                        }
-                    })
-                    .collect();
-
-                let feature_block: TokenStream = quote! {
-                    #[derive(Clone)]
-                    pub struct #api_name {
-                         #(#properties,)*
-                    }
-                    impl #api_name {
-                        pub fn load<F>(mut _f: F) -> Self
-                        where
-                            F: FnMut(&::std::ffi::CStr) -> *const c_void {
-                            Self {
-                                #(#impl_block,)*
-                            }
-                        }
-
-                        #(#method_block)*
-                    }
-                };
-                features_codes.push(feature_block);
-            }
-            APIName::Unknown => {}
-            _ => {}
-        }
-    }
+    // let mut features_codes: Vec<TokenStream> = Vec::new();
+    // for (name, group) in &context.feature_cache {
+    //     match name {
+    //         APIName::OPENGL { minor, major } => {
+    //             let api_name = format_ident!("EntryFnGL{}{}", major, minor);
+    //             let properties: Vec<TokenStream> = group
+    //                 .commands
+    //                 .iter()
+    //                 .map(|cmd| {
+    //                     let command_name = format_ident!("{}", cmd.as_str());
+    //                     let command_type = format_ident!("PFN_{}", cmd.as_str());
+    //                     quote! {
+    //                         #command_name : crate::gl::command::#command_type
+    //                     }
+    //                 })
+    //                 .collect();
+    //
+    //             let method_block: Vec<TokenStream> = group
+    //                 .commands
+    //                 .iter()
+    //                 .map(|cmd| {
+    //                     let command = &context.command_cache[cmd.as_str()];
+    //                     let api_name = format_ident!("{}", cmd.as_str());
+    //                     let (arg_block, return_block) =
+    //                         build_function_block(&command.proto, command.arguments.as_slice());
+    //
+    //                     let args: Vec<TokenStream> = command
+    //                         .arguments
+    //                         .iter()
+    //                         .map(|p| {
+    //                             let name = format_ident!("_{}", p.name.as_str());
+    //                             quote!{ #name }
+    //                         })
+    //                         .collect();
+    //
+    //                     match return_block {
+    //                         None => {
+    //                             quote! {
+    //                                 pub unsafe fn #api_name(&self,#arg_block) {
+    //                                    (self.#api_name)(#(#args,)*);
+    //                                 }
+    //                             }
+    //                         }
+    //                         Some(return_block) => {
+    //                             quote! {
+    //                                 pub unsafe fn #api_name(&self,#arg_block) -> #return_block {
+    //                                     (self.#api_name)(#(#args,)*)
+    //                                 }
+    //                             }
+    //                         }
+    //                     }
+    //                 })
+    //                 .collect();
+    //
+    //             let impl_block: Vec<TokenStream> = group
+    //                 .commands
+    //                 .iter()
+    //                 .map(|cmd| {
+    //                     let command = &context.command_cache[cmd.as_str()];
+    //                     let api_name = format_ident!("{}", cmd.as_str());
+    //                     let byte_lit = LitByteStr::new(
+    //                         format!("{}\0", cmd.as_str()).as_bytes(),
+    //                         Span::call_site(),
+    //                     );
+    //                     let panic_message = syn::LitStr::new(
+    //                         format!("Unable to load {}", cmd.as_str()).as_str(),
+    //                         Span::call_site(),
+    //                     );
+    //
+    //                     let internal_api_catch = format_ident!("__{}", cmd.as_str());
+    //                     let (arg_block, return_block) =
+    //                         build_function_block(&command.proto, command.arguments.as_slice());
+    //
+    //                     let function_block = match return_block {
+    //                         None => {
+    //                             quote! {
+    //                                (#arg_block)
+    //                             }
+    //                         }
+    //                         Some(return_block) => {
+    //                             quote! { (#arg_block) -> #return_block }
+    //                         }
+    //                     };
+    //
+    //                     quote! {
+    //                         #api_name : unsafe {
+    //                             unsafe extern "system" fn #internal_api_catch #function_block {
+    //                                 panic!(#panic_message)
+    //                             }
+    //                             let cname = ::std::ffi::CStr::from_bytes_with_nul_unchecked(
+    //                                 #byte_lit
+    //                             );
+    //                             let val = _f(cname);
+    //                             if val.is_null() {
+    //                                 #internal_api_catch
+    //                             } else {
+    //                                 ::std::mem::transmute(val)
+    //                             }
+    //                         }
+    //                     }
+    //                 })
+    //                 .collect();
+    //
+    //             let feature_block: TokenStream = quote! {
+    //                 #[derive(Clone)]
+    //                 pub struct #api_name {
+    //                      #(#properties,)*
+    //                 }
+    //                 impl #api_name {
+    //                     pub fn load<F>(mut _f: F) -> Self
+    //                     where
+    //                         F: FnMut(&::std::ffi::CStr) -> *const c_void {
+    //                         Self {
+    //                             #(#impl_block,)*
+    //                         }
+    //                     }
+    //
+    //                     #(#method_block)*
+    //                 }
+    //             };
+    //             features_codes.push(feature_block);
+    //         }
+    //         APIName::Unknown => {}
+    //         _ => {}
+    //     }
+    // }
 
     let enum_code = quote! {
         use std::fmt;
@@ -1078,33 +1080,33 @@ fn write_gl(opengl_registry: &Path, output: PathBuf) {
 
         use std::ffi::c_void;
 
-        #(#features_codes)*
+        #feature_quote
     };
 
-    let entry_code = quote! {
-        use crate::gl;
-        use crate::types::*;
-        use gl::command::*;
-        use gl::enums::*;
-        use gl::bitflags::*;
-
-        use std::ffi::c_void;
-
-        #entry_code
-    };
+    // let entry_code = quote! {
+    //     use crate::gl;
+    //     use crate::types::*;
+    //     use gl::command::*;
+    //     use gl::enums::*;
+    //     use gl::bitflags::*;
+    //
+    //     use std::ffi::c_void;
+    //
+    //     #feature_code
+    // };
 
     // let mut gl_enums_file = File::create(gl_dir.join("enums.rs")).expect("enums.rs");
     let mut bitflag_file = File::create(gl_path.join("bitflags.rs")).expect("bitflags.rs");
     let mut enum_file = File::create(gl_path.join("enums.rs")).expect("enums.rs");
     let mut command_file = File::create(gl_path.join("command.rs")).expect("command.rs");
     let mut feature_file = File::create(gl_path.join("feature.rs")).expect("feature.rs");
-    let mut entry_file = File::create(gl_path.join("entry.rs")).expect("entry.rs");
+    let mut features_file = File::create(gl_path.join("feature.rs")).expect("feature.rs");
 
     // write!(&mut gl_enums_file, "{}", enum_code).expect("Unable to write enums.rs");
     write!(&mut bitflag_file, "{}", bitflag_code).expect("Unable to write bitflag.rs");
     write!(&mut enum_file, "{}", enum_code).expect("Unable to write bitflag.rs");
     write!(&mut command_file, "{}", command_code).expect("Unable to write command.rs");
-    write!(&mut entry_file, "{}", entry_code).expect("Unable to write command.rs");
+    write!(&mut features_file, "{}", feature_code).expect("Unable to write command.rs");
 
     // // generate bindings
     // let mut bindings = bindgen::Builder::default();
