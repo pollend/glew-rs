@@ -1,4 +1,3 @@
-use std::cmp::{min, Ordering};
 use itertools::Itertools;
 use khronos_registry_parse::gl::{
     Command, CommandParam, Enum, Enums, EnumsChild, ExtensionChild, InterfaceItem, Registry,
@@ -11,6 +10,7 @@ use nom::combinator::{complete, map, map_parser, map_res, opt, recognize, value}
 use nom::error::{ParseError, VerboseError};
 use nom::multi::{many0, many1};
 use nom::sequence::{preceded, terminated, tuple};
+use std::cmp::{min, Ordering};
 
 use nom::{Finish, IResult, Parser};
 use quote::{format_ident, quote, ToTokens};
@@ -33,71 +33,9 @@ use crate::command_parser::{
 };
 use crate::const_parser::{parse_constant, Constant};
 use syn::LitByteStr;
+use crate::context::{APIArgument, APICommand, APIEnum, APIName, APIProto, collect_unique_enums, construct_context, map_type};
+use crate::gl_generator::write_gl;
 
-#[derive(Clone, Eq)]
-struct APIEnum {
-    name: String,
-    constant: Constant,
-}
-
-impl PartialEq for APIEnum {
-    fn eq(&self, other: &Self) -> bool {
-        self.name.as_str() == other.name.as_str()
-    }
-}
-impl Hash for APIEnum {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.name.hash(state);
-    }
-}
-
-struct APIArgument {
-    group: Option<String>,
-    name: String,
-    def: ArgumentDef,
-}
-
-struct APIProto {
-    group: Option<String>,
-    def: ProtoDef,
-}
-
-struct APICommand {
-    name: String,
-    proto: APIProto,
-    arguments: Vec<APIArgument>,
-}
-
-struct APIGroup {
-    groups: Vec<ExtensionChild>,
-}
-
-#[derive(Clone, PartialEq, Eq, Hash)]
-enum APIName {
-    OPENGL { minor: u16, major: u16 },
-    GLES { minor: u16, major: u16 },
-    GLES2 { minor: u16, major: u16 },
-    GLES3 { minor: u16, major: u16 },
-    Unknown,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct _Enum(Enum);
-
-impl Hash for _Enum {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.0.name.hash(state)
-    }
-}
-
-struct Context {
-    constant_map: HashMap<String, APIEnum>,
-    bitfield_cache: HashMap<String, HashSet<APIEnum>>,
-    enum_cache: HashMap<String, HashSet<APIEnum>>,
-    command_cache: HashMap<String, APICommand>,
-    feature_cache: HashMap<APIName, APIGroup>,
-    extension_cache: HashMap<String, APIGroup>,
-}
 
 fn construct_const(enums: &[&APIEnum]) -> Vec<TokenStream> {
     enums
@@ -112,18 +50,6 @@ fn construct_const(enums: &[&APIEnum]) -> Vec<TokenStream> {
         .collect()
 }
 
-fn map_type(arg: &str) -> TokenStream {
-    match arg {
-        "_cl_context" => quote! {CLContext},
-        "_cl_event" => quote! {CLContext},
-        "void" => quote! { std::os::raw::c_void },
-        "int64_t" => quote! {u64},
-        "int32_t" => quote! {u32},
-        "Bool" => quote! {bool},
-        "float" => quote! { f32 },
-        i => format_ident!("{}", i).to_token_stream(),
-    }
-}
 
 fn map_fundamental_type(fundamental_type: &FundamentalType) -> TokenStream {
     match fundamental_type {
@@ -204,19 +130,6 @@ fn construct_arguments(args: &[APIArgument]) -> Vec<TokenStream> {
         .collect()
 }
 
-fn collect_unique_enums(collection: &HashMap<String, HashSet<APIEnum>>) -> HashSet<APIEnum> {
-    let mut results: HashSet<APIEnum> = HashSet::default();
-    for (name, values) in collection.iter() {
-        if name.as_str().eq("SpecialNumbers") {
-           continue
-        }
-        for e in values {
-            results.insert(e.clone());
-        }
-    }
-    results
-}
-
 fn build_enum_block(collection: &HashMap<String, HashSet<APIEnum>>) -> Vec<TokenStream> {
     collection
         .iter()
@@ -240,7 +153,7 @@ fn build_enum_block(collection: &HashMap<String, HashSet<APIEnum>>) -> Vec<Token
         .collect()
 }
 
-fn build_enum_type_block(collection: &HashMap<String, HashSet<APIEnum>>) -> Vec<TokenStream>{
+fn build_enum_type_block(collection: &HashMap<String, HashSet<APIEnum>>) -> Vec<TokenStream> {
     collection
         .iter()
         .map(|(name, enums)| {
@@ -282,7 +195,7 @@ fn build_bitflag_block(collection: &HashMap<String, HashSet<APIEnum>>) -> Vec<To
         .collect()
 }
 
-fn build_function_block(
+pub fn build_function_block(
     proto: &APIProto,
     arguments: &[APIArgument],
 ) -> (TokenStream, Option<TokenStream>) {
@@ -341,7 +254,7 @@ fn build_function_block(
     }
 }
 
-fn build_command_block(collection: &HashMap<String, APICommand>) -> Vec<TokenStream> {
+pub fn build_command_block(collection: &HashMap<String, APICommand>) -> Vec<TokenStream> {
     collection
         .iter()
         .map(|(name, command)| {
@@ -366,213 +279,6 @@ fn build_command_block(collection: &HashMap<String, APICommand>) -> Vec<TokenStr
         .collect()
 }
 
-fn parse_number_major_minor(version: &str) -> (u16, u16) {
-    let r = Regex::new(r"([0-9]+).([0-9]+)").unwrap();
-    let version = r
-        .captures(version)
-        .expect("failed to capture version string");
-    (
-        version.get(1).unwrap().as_str().parse().unwrap(),
-        version.get(2).unwrap().as_str().parse().unwrap(),
-    )
-}
-
-fn construct_context(registry: &Registry) -> Context {
-    let mut command_cache: HashMap<String, APICommand> = HashMap::default();
-    let mut feature_cache: HashMap<APIName, APIGroup> = HashMap::default();
-    let _extension_cache: HashMap<String, APIGroup> = HashMap::default();
-    let mut enum_cache: HashMap<String, HashSet<APIEnum>> = HashMap::default();
-    let mut bitflag_cache: HashMap<String, HashSet<APIEnum>> = HashMap::default();
-    let mut constant_map: HashMap<String, APIEnum> = HashMap::default();
-
-    for enums in registry
-        .0
-        .iter()
-        .filter_map(|item| match item {
-            RegistryChild::Enums(e) => Some(e),
-            _ => None,
-        })
-        .into_iter()
-    {
-        let is_bitmask = match &enums.enum_type {
-            None => false,
-            Some(en) => en.eq("bitmask"),
-        };
-        let base_name = enums.group.as_ref();
-
-        for child in &enums.children {
-            if let EnumsChild::Enum(e) = child {
-                let names = [base_name, e.group.as_ref()];
-                for nn in names.iter() {
-                    if let Some(test) = nn {
-                        if test.as_str().eq("TransformFeedbackTokenNV") {
-                            // TODO: skip for now
-                            continue;
-                        }
-                        for n in test.split(",") {
-                            let api_enum = APIEnum {
-                                name: e.name.to_string(),
-                                constant: parse_constant(e.value.as_ref().unwrap().as_str())
-                                    .finish()
-                                    .expect("failed to parse constant")
-                                    .1,
-                            };
-
-                            // treat PathFontStyle as a bitflat
-                            (if is_bitmask || n.eq("PathFontStyle") {
-                                &mut bitflag_cache
-                            } else {
-                                &mut enum_cache
-                            })
-                            .entry(n.trim().to_string())
-                            .or_insert(HashSet::default())
-                            .insert(api_enum.clone());
-                            constant_map.insert(api_enum.name.clone(), api_enum.clone());
-                        }
-                    }
-                }
-            }
-        }
-    }
-    for commands in registry
-        .0
-        .iter()
-        .filter_map(|item| match item {
-            RegistryChild::Commands(e) => Some(e),
-            _ => None,
-        })
-        .into_iter()
-    {
-        for c in &commands.children {
-            command_cache.insert(
-                c.proto.definition.name.clone(),
-                APICommand {
-                    name: c.proto.definition.name.to_string(),
-                    proto: APIProto {
-                        def: {
-                            let result =
-                                parse_proto::<VerboseError<&str>>(c.proto.definition.code.as_str());
-                            match result.finish() {
-                                Ok(def) => def.1.clone(),
-                                Err(error) => {
-                                    panic!(
-                                        "failed to parse {}: {}",
-                                        c.proto.definition.code.as_str(),
-                                        error
-                                    );
-                                }
-                            }
-                        },
-                        group: c.proto.group.as_ref().map(|i| i.clone()),
-                    },
-                    arguments: c
-                        .params
-                        .iter()
-                        .map(|it| {
-                            let group_name = match it.group.as_ref() {
-                                None => None,
-                                Some(group_name) => {
-                                    if enum_cache.contains_key(group_name.as_str())
-                                        || bitflag_cache.contains_key(group_name.as_str())
-                                    {
-                                        Some(group_name)
-                                    } else {
-                                        None
-                                    }
-                                }
-                            };
-                            let result =
-                                parse_argument::<VerboseError<&str>>(it.definition.code.as_str());
-                            match result.finish() {
-                                Ok(def) => APIArgument {
-                                    group: group_name.map(|i| i.clone()),
-                                    name: it.definition.name.clone(),
-                                    def: def.1,
-                                },
-                                Err(error) => {
-                                    panic!("failed to parse {}: {}", it.definition.code, error);
-                                }
-                            }
-                        })
-                        .collect(),
-                },
-            );
-        }
-    }
-
-    for features in registry
-        .0
-        .iter()
-        .filter_map(|item| match item {
-            RegistryChild::Features(e) => Some(e),
-            _ => None,
-        })
-        .into_iter()
-    {
-        if let Some(api) = &features.api {
-            // println!("feature api: {} name: {}", api.as_str(), features.name.as_ref().map_or( "UNKNOWN", |a|  a.as_str()));
-            match api.as_str() {
-                "gl" => {
-                    let (major, minor) = parse_number_major_minor(
-                        features
-                            .number
-                            .as_ref()
-                            .expect("feature version is missing"),
-                    );
-                    let api = APIName::OPENGL { major, minor };
-                    feature_cache.entry(api).or_insert(APIGroup {
-                        groups: features.children.clone()
-                    });
-                }
-                "gles2" => {}
-                "gles1" => {}
-                api => {
-                    println!("unhandled api {}", api)
-                }
-            }
-        }
-    }
-    for extension in registry
-        .0
-        .iter()
-        .filter_map(|item| match item {
-            RegistryChild::Extensions(e) => Some(e),
-            _ => None,
-        })
-        .into_iter()
-    {
-        for child_ext in &extension.children {
-            for child in &child_ext.children {
-                match child {
-                    ExtensionChild::Require { items, api: _, .. } => {
-                        for entry in items {
-                            match entry {
-                                InterfaceItem::Enum(_) => {}
-                                InterfaceItem::Type { .. } => {}
-                                InterfaceItem::Command {
-                                    name: _,
-                                    comment: _,
-                                } => {}
-                                _ => {}
-                            }
-                        }
-                    }
-                    ExtensionChild::Removed { .. } => {}
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    Context {
-        constant_map,
-        bitfield_cache: bitflag_cache,
-        enum_cache,
-        command_cache,
-        feature_cache,
-        extension_cache: Default::default(),
-    }
-}
 
 pub fn write_source_code<P: AsRef<Path>>(headers_dir: &Path, src_dir: P) {
     write_gl(headers_dir, PathBuf::from(src_dir.as_ref()));
@@ -588,34 +294,30 @@ fn write_glx(opengl_registry: &Path, output: PathBuf) {
         khronos_registry_parse::gl::parse_file(xml_path.as_path()).expect("invalid xml file");
     let mut context = construct_context(&spec);
 
-
-    // let mut enums: HashSet<APIEnum> = HashSet::default();
-    // for ens in context.enum_cache.values() {
-    //     for e in ens {
-    //         enums.insert(e.clone());
-    //     }
-    // }
     let unique_enums = collect_unique_enums(&context.enum_cache);
     let unique_bitfield = collect_unique_enums(&context.bitfield_cache);
-    let all_enums_const: Vec<TokenStream> = unique_enums.iter().map(|c| {
-        let name = format_ident!("{}", &c.name);
-        let value = &c.constant;
-        quote! {
-            pub const #name: GLenum = #value;
-        }
-    }).collect();
+    let all_enums_const: Vec<TokenStream> = unique_enums
+        .iter()
+        .map(|c| {
+            let name = format_ident!("{}", &c.name);
+            let value = &c.constant;
+            quote! {
+                pub const #name: GLenum = #value;
+            }
+        })
+        .collect();
 
-    let all_bitfield_const: Vec<TokenStream> = unique_bitfield.iter().map(|c| {
-        let name = format_ident!("{}", &c.name);
-        let value = &c.constant;
-        quote! {
-            pub const #name: GLbitfield = #value;
-        }
-    }).collect();
+    let all_bitfield_const: Vec<TokenStream> = unique_bitfield
+        .iter()
+        .map(|c| {
+            let name = format_ident!("{}", &c.name);
+            let value = &c.constant;
+            quote! {
+                pub const #name: GLbitfield = #value;
+            }
+        })
+        .collect();
 
-
-    // let enum_codes: Vec<TokenStream> = build_enum_block(&context.enum_cache);
-    // let bitflag_codes: Vec<TokenStream> = build_bitflag_block(&context.bitfield_cache);
     let command_codes: Vec<TokenStream> = build_command_block(&context.command_cache);
 
     let enum_code = quote! {
@@ -725,286 +427,3 @@ fn write_wgl(opengl_registry: &Path, output: PathBuf) {
     write!(&mut command_file, "{}", command_code).expect("Unable to write command.rs");
 }
 
-fn write_gl(opengl_registry: &Path, output: PathBuf) {
-    let mut xml_path = PathBuf::from(opengl_registry);
-    xml_path.push("xml/gl.xml");
-
-    let (spec, _errors) =
-        khronos_registry_parse::gl::parse_file(xml_path.as_path()).expect("invalid xml file");
-    let mut context = construct_context(&spec);
-
-    // let enum_codes: Vec<TokenStream> = build_enum_block(&context.enum_cache);
-    // let bitflag_codes: Vec<TokenStream> = build_bitflag_block(&context.bitfield_cache);
-    let command_codes: Vec<TokenStream> = build_command_block(&context.command_cache);
-
-    let unique_enums = collect_unique_enums(&context.enum_cache);
-    let unique_bitfield = collect_unique_enums(&context.bitfield_cache);
-    let all_enums_const: Vec<TokenStream> = unique_enums.iter().map(|c| {
-        let name = format_ident!("{}", &c.name);
-        let value = &c.constant;
-        quote! {
-            #[allow(non_upper_case_globals)]
-            pub const #name: GLenum = #value;
-        }
-    }).collect();
-
-    let all_bitfield_const: Vec<TokenStream> = unique_bitfield.iter().map(|c| {
-
-
-        let name = format_ident!("{}", &c.name);
-        let value = &c.constant;
-        quote! {
-            #[allow(non_upper_case_globals)]
-            pub const #name: GLbitfield = #value;
-        }
-    }).collect();
-
-
-    let mut gl_path = PathBuf::from(output);
-    gl_path.push("gl");
-
-    #[derive(Clone, PartialEq, Eq)]
-    struct GLGroup {
-        major: u16,
-        minor: u16,
-        commands: HashSet<String>
-    }
-    let mut gl_group: Vec<GLGroup> = Vec::new();
-    let mut gl_cmd_features: HashMap<String, HashSet<String>> = HashMap::default();
-    let mut gl_commands: HashSet<String> = HashSet::default();
-
-    for (major, minor) in context.feature_cache.keys().into_iter().filter_map(|it| match it {
-        APIName::OPENGL { major, minor } => { Some((major, minor))}
-        _ => None
-    }).sorted_by(|(major1, minor1), (major2, minor2)| {
-        let mut order = Ord::cmp(major1, major2);
-        if order == Ordering::Equal {
-            order = Ord::cmp(minor1, minor2)
-        }
-        order
-    }) {
-        let api = APIName::OPENGL { major: *major, minor: *minor};
-        let feature = &context.feature_cache[&api];
-        for extension in &feature.groups {
-            match extension {
-                ExtensionChild::Require { items, .. } => {
-                    for it in items {
-                        match it {
-                            InterfaceItem::Enum(_) => {}
-                            InterfaceItem::Type { .. } => {}
-                            InterfaceItem::Command { name, .. } => {
-                                gl_commands.insert(name.clone());
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                ExtensionChild::Removed { items, ..} => {
-                    for it in items {
-                        match it {
-                            InterfaceItem::Enum(_) => {}
-                            InterfaceItem::Type { .. } => {}
-                            InterfaceItem::Command { name, .. } => {
-                                gl_commands.remove(name);
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        for cmd in gl_commands.iter() {
-            gl_cmd_features.entry(cmd.clone())
-                .or_insert(HashSet::default())
-                .insert(format!("gl{}{}", *major, *minor));
-        }
-
-        gl_group.push(GLGroup {
-            major: *major,
-            minor: *minor,
-            commands: gl_commands.clone()
-        });
-    }
-
-    for g in &gl_group {
-        let method_block: Vec<TokenStream> = g.commands.iter().map(|cmd| {
-            let command = &context.command_cache[cmd.as_str()];
-            let api_name = format_ident!("{}", cmd.as_str());
-            let (arg_block, return_block) =
-                build_function_block(&command.proto, command.arguments.as_slice());
-            let args: Vec<TokenStream> = command
-                .arguments
-                .iter()
-                .map(|p| {
-                    let name = format_ident!("_{}", p.name.as_str());
-                    quote!{ #name }
-                })
-                .collect();
-
-            match return_block {
-                None => {
-                    quote! {
-                        unsafe fn #api_name(&self,#arg_block) {
-                             (self.entry().#api_name)(#(#args,)*)
-                        }
-                    }
-                }
-                Some(return_block) => {
-                    quote! {
-                         unsafe fn #api_name(&self,#arg_block) -> #return_block{
-                            (self.entry().#api_name)(#(#args,)*)
-                        }
-                    }
-                }
-            }
-        }).collect();
-        let api_name = format_ident!("GL{}{}", g.major, g.minor);
-        let function_codes = quote! {
-            use crate::types::*;
-            use crate::gl::feature::EntryGLFn;
-
-            pub trait #api_name {
-                unsafe fn entry(&self) -> &EntryGLFn;
-
-                #(#method_block)*
-            }
-        };
-
-        let mut function_file = File::create(gl_path.join(format!("gl{}{}", g.major, g.minor)).join("api.rs")).expect("functions.rs");
-        write!(&mut function_file, "{}", function_codes).expect("Unable to write command.rs");
-
-    }
-
-    fn construct_features(features: &HashSet<String>) -> TokenStream {
-        let collection: Vec<TokenStream> = features.iter().map(|it| {
-            let name = it.as_str();
-            quote! { feature = #name }
-        }).collect();
-        quote! {
-            #[cfg(any( #(#collection,)* ))]
-        }
-    }
-    // for (name, features) in
-    let properties: Vec<TokenStream> = gl_cmd_features.iter().map(|(name, features)| {
-        let feature_codes = construct_features(features);
-        let command_name = format_ident!("{}", name.as_str());
-        let command_type = format_ident!("PFN_{}", name.as_str());
-        quote! {
-            #feature_codes
-            pub #command_name : crate::gl::command::#command_type
-        }
-    }).collect();
-
-    let impl_block: Vec<TokenStream> = gl_cmd_features.iter().map(|(name, features)| {
-        let feature_codes = construct_features(features);
-        let command = &context.command_cache[name.as_str()];
-        let api_name = format_ident!("{}", name.as_str());
-        let internal_api_catch = format_ident!("__{}", name.as_str());
-        let (arg_block, return_block) =
-            build_function_block(&command.proto, command.arguments.as_slice());
-        let byte_lit = LitByteStr::new(
-            format!("{}\0", name.as_str()).as_bytes(),
-            Span::call_site(),
-        );
-        let panic_message = syn::LitStr::new(
-            format!("Unable to load {}", name.as_str()).as_str(),
-            Span::call_site(),
-        );
-
-        let function_block = match return_block {
-            None => {
-                quote! {
-                   (#arg_block)
-                }
-            }
-            Some(return_block) => {
-                quote! { (#arg_block) -> #return_block }
-            }
-        };
-
-        quote! {
-            #feature_codes
-            #api_name : unsafe {
-                unsafe extern "system" fn #internal_api_catch #function_block {
-                    panic!(#panic_message)
-                }
-                let cname = ::std::ffi::CStr::from_bytes_with_nul_unchecked(
-                    #byte_lit
-                );
-                let val = _f(cname);
-                if val.is_null() {
-                    #internal_api_catch
-                } else {
-                    ::std::mem::transmute(val)
-                }
-            }
-        }
-    }).collect();
-
-    let enum_code = quote! {
-        use crate::types::*;
-        #(#all_enums_const)*
-    };
-
-    let bitflag_code = quote! {
-        use crate::types::*;
-        #(#all_bitfield_const)*
-    };
-
-    // use std::fmt;
-    // use std::ffi::c_void;
-    // use gl::enums::*;
-    // use gl::bitflags::*;
-    // use crate::gl;
-    let command_code = quote! {
-        use crate::types::*;
-        #(#command_codes)*
-    };
-
-    //         use gl::command::*;
-    //         use gl::enums::*;
-    //         use gl::bitflags::*;
-    let feature_code = quote! {
-        use crate::types::*;
-        use std::ffi::c_void;
-
-        #[derive(Clone)]
-        pub struct EntryGLFn {
-             #(#properties,)*
-        }
-        impl EntryGLFn {
-            pub fn load<F>(mut _f: F) -> Self
-                where
-                    F: FnMut(&::std::ffi::CStr) -> *const c_void {
-                    Self {
-                        #(#impl_block,)*
-                    }
-            }
-        }
-    };
-
-    // let mut gl_enums_file = File::create(gl_dir.join("enums.rs")).expect("enums.rs");
-    let mut bitflag_file = File::create(gl_path.join("bitflags.rs")).expect("bitflags.rs");
-    let mut enum_file = File::create(gl_path.join("enums.rs")).expect("enums.rs");
-    let mut command_file = File::create(gl_path.join("command.rs")).expect("command.rs");
-    // let mut feature_file = File::create(gl_path.join("feature.rs")).expect("feature.rs");
-    let mut features_file = File::create(gl_path.join("feature.rs")).expect("feature.rs");
-
-    // write!(&mut gl_enums_file, "{}", enum_code).expect("Unable to write enums.rs");
-    write!(&mut bitflag_file, "{}", bitflag_code).expect("Unable to write bitflag.rs");
-    write!(&mut enum_file, "{}", enum_code).expect("Unable to write bitflag.rs");
-    write!(&mut command_file, "{}", command_code).expect("Unable to write command.rs");
-    write!(&mut features_file, "{}", feature_code).expect("Unable to write command.rs");
-
-    // // generate bindings
-    // let mut bindings = bindgen::Builder::default();
-    // let mut include_path =  PathBuf::from(opengl_registry);
-    // include_path.push("api");
-    // bindings = bindings.header(include_path.join("GL/glcorearb.h").to_str().unwrap());
-    // bindings.generate()
-    //     .expect("Unable to generate native bindings")
-    //     .write_to_file(gl_path.join("natives.rs"))
-    //     .expect("Couln't write native bindings");
-}
