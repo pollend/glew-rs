@@ -1,11 +1,12 @@
 [package]
 name = "rogl"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2018"
 description = "Rust GL library (rogl): A complete gl binding built for Rust."
 authors = [
     "Michael Pollind <mpollind@gmail.com>"
 ]
+readme = "../README.md"
 homepage = "https://github.com/pollend/rogl.git"
 repository = "https://github.com/pollend/rogl"
 license = "Apache-2.0"
