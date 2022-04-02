@@ -40,6 +40,12 @@ gl44 = []
 gl45 = []
 gl46 = []
 
+gles10 = []
+gles20 = []
+gles30 = []
+gles31 = []
+gles32 = []
+
 
 [dependencies]
 libloading = { version = "0.7", optional = true }

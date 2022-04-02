@@ -1,13 +1,16 @@
-use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
-use khronos_registry_parse::gl::{EnumsChild, ExtensionChild, InterfaceItem, Registry, RegistryChild};
+use crate::command_parser::{parse_argument, parse_proto, ArgumentDef, ProtoDef};
+use crate::const_parser::{parse_constant, Constant};
+use khronos_registry_parse::gl::{
+    EnumsChild, ExtensionChild, InterfaceItem, Registry, RegistryChild,
+};
 use nom::error::VerboseError;
 use nom::Finish;
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote, ToTokens};
 use regex::Regex;
-use crate::command_parser::{ArgumentDef, parse_argument, parse_proto, ProtoDef};
-use crate::const_parser::{Constant, parse_constant};
+use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 
 #[derive(Clone, Eq)]
 pub struct APIEnum {
@@ -56,6 +59,63 @@ pub enum APIName {
     Unknown,
 }
 
+impl APIName {
+    pub fn order(a1: &APIName, a2: &APIName) -> Ordering {
+        let order_major_minor = |major1, minor1, major2, minor2| -> Ordering {
+            let mut order = Ord::cmp(major1, major2);
+            if order == Ordering::Equal {
+                order = Ord::cmp(minor1, minor2)
+            }
+            return order;
+        };
+        match (a1, a2) {
+            (
+                APIName::OPENGL {
+                    major: major1,
+                    minor: minor1,
+                },
+                APIName::OPENGL {
+                    major: major2,
+                    minor: minor2,
+                },
+            ) => order_major_minor(major1, minor1, major2, minor2),
+            (
+                APIName::GLES {
+                    major: major1,
+                    minor: minor1,
+                },
+                APIName::GLES {
+                    major: major2,
+                    minor: minor2,
+                },
+            ) => order_major_minor(major1, minor1, major2, minor2),
+            (
+                APIName::GLES2 {
+                    major: major1,
+                    minor: minor1,
+                },
+                APIName::GLES2 {
+                    major: major2,
+                    minor: minor2,
+                },
+            ) => order_major_minor(major1, minor1, major2, minor2),
+            (
+                APIName::GLES3 {
+                    major: major1,
+                    minor: minor1,
+                },
+                APIName::GLES3 {
+                    major: major2,
+                    minor: minor2,
+                },
+            ) => order_major_minor(major1, minor1, major2, minor2),
+            _ => {
+                panic!("mismatched api's")
+            }
+        }
+    }
+}
+
 pub struct Context {
     pub constant_map: HashMap<String, APIEnum>,
     pub bitfield_cache: HashMap<String, HashSet<APIEnum>>,
@@ -75,7 +135,6 @@ pub fn parse_number_major_minor(version: &str) -> (u16, u16) {
         version.get(2).unwrap().as_str().parse().unwrap(),
     )
 }
-
 
 pub fn collect_unique_enums(collection: &HashMap<String, HashSet<APIEnum>>) -> HashSet<APIEnum> {
     let mut results: HashSet<APIEnum> = HashSet::default();
@@ -137,9 +196,9 @@ pub fn construct_context(registry: &Registry) -> Context {
                             } else {
                                 &mut enum_cache
                             })
-                                .entry(n.trim().to_string())
-                                .or_insert(HashSet::default())
-                                .insert(api_enum.clone());
+                            .entry(n.trim().to_string())
+                            .or_insert(HashSet::default())
+                            .insert(api_enum.clone());
                             constant_map.insert(api_enum.name.clone(), api_enum.clone());
                         }
                     }
@@ -321,4 +380,3 @@ pub fn map_type(arg: &str) -> TokenStream {
         i => format_ident!("{}", i).to_token_stream(),
     }
 }
-

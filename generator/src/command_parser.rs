@@ -1,10 +1,10 @@
 use nom::branch::alt;
 use nom::bytes::complete::{is_not, tag, take_till, take_until, take_while};
 use nom::character::complete::{alphanumeric1, char, none_of, one_of, space0, space1};
-use nom::character::{is_newline, is_space};
+
 use nom::combinator::{all_consuming, map, map_opt, map_res, not, opt, recognize, value, verify};
-use nom::error::{ParseError, VerboseError};
-use nom::{Finish, IResult};
+use nom::error::ParseError;
+use nom::IResult;
 
 use nom::multi::many1;
 use nom::sequence::tuple;

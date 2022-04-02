@@ -1,9 +1,6 @@
 #![allow(non_snake_case)]
 
-pub mod bitflags;
-pub mod command;
 pub mod context;
-pub mod enums;
 pub mod feature;
 
 #[cfg(feature = "gl10")]

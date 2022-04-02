@@ -1,41 +1,38 @@
-use itertools::Itertools;
-use khronos_registry_parse::gl::{
-    Command, CommandParam, Enum, Enums, EnumsChild, ExtensionChild, InterfaceItem, Registry,
-    RegistryChild,
-};
-use nom::branch::alt;
-use nom::bytes::complete::tag;
-use nom::character::complete::{alphanumeric1, char, hex_digit1, one_of, u16};
-use nom::combinator::{complete, map, map_parser, map_res, opt, recognize, value};
-use nom::error::{ParseError, VerboseError};
-use nom::multi::{many0, many1};
-use nom::sequence::{preceded, terminated, tuple};
-use std::cmp::{min, Ordering};
-
-use nom::{Finish, IResult, Parser};
-use quote::{format_ident, quote, ToTokens};
-use regex::Regex;
-
-use std::collections::{HashMap, HashSet};
-
-use proc_macro2::{Span, TokenStream};
-use std::fs::File;
-use std::hash::{Hash, Hasher};
-use std::io::Write;
-use std::os::raw::c_int;
-use std::path::{Path, PathBuf};
-
-use syn::spanned::Spanned;
-
 use crate::command_parser::{
     parse_argument, parse_proto, Arg, ArgumentDef, FundamentalType, PointerType, ProtoDef,
     ProtoReturn,
 };
-use crate::const_parser::{parse_constant, Constant};
-use syn::LitByteStr;
-use crate::context::{APIArgument, APICommand, APIEnum, APIName, APIProto, collect_unique_enums, construct_context, map_type};
 use crate::gl_generator::write_gl;
+use itertools::Itertools;
+use nom::error::ParseError;
+use proc_macro2::TokenStream;
+use quote::{format_ident, quote};
+use std::collections::{HashMap, HashSet};
+use std::fs::File;
+use std::io::Write;
+use std::iter::{FromIterator, Map};
+use std::path::{Path, PathBuf};
+use syn::spanned::Spanned;
 
+use crate::context::{
+    collect_unique_enums, construct_context, map_type, APIArgument, APICommand, APIEnum, APIProto,
+};
+
+pub fn construct_field_block<'a>(
+    vals: impl Iterator<Item = &'a APIEnum>,
+    mut field_handler: impl FnMut(&'a APIEnum) -> TokenStream,
+) -> Vec<TokenStream> {
+    vals.map(|c| {
+        let field_type = field_handler(c);
+        let name = format_ident!("{}", &c.name);
+        let value = &c.constant;
+        quote! {
+            #[allow(non_upper_case_globals)]
+            pub const #name: #field_type = #value;
+        }
+    })
+    .collect()
+}
 
 fn construct_const(enums: &[&APIEnum]) -> Vec<TokenStream> {
     enums
@@ -50,6 +47,29 @@ fn construct_const(enums: &[&APIEnum]) -> Vec<TokenStream> {
         .collect()
 }
 
+// fn construct_const(enums: &[&APIEnum]) -> Vec<TokenStream> {
+//     enums
+//         .iter()
+//         .map(|c| {
+//             let name = format_ident!("{}", &c.name);
+//             let value = &c.constant;
+//             quote! {
+//                 pub const #name: Self = Self(#value);
+//             }
+//         })
+//         .collect()
+// }
+//
+// pub fn construct_bitfield_block<'a>(vals: impl Iterator<Item = &'a APIEnum>) -> impl Iterator<Item=TokenStream> {
+//     vals.map(|c|{
+//         let name = format_ident!("{}", &c.name);
+//         let value = &c.constant;
+//         quote! {
+//             #[allow(non_upper_case_globals)]
+//             pub const #name: GLbitfield = #value;
+//         }
+//     })
+// }
 
 fn map_fundamental_type(fundamental_type: &FundamentalType) -> TokenStream {
     match fundamental_type {
@@ -107,12 +127,12 @@ fn construct_arguments(args: &[APIArgument]) -> Vec<TokenStream> {
                 match &cmd.def.argument {
                     Arg::Fundamental(fund_type) => map_fundamental_type(fund_type),
                     Arg::Struct(struct_type) => {
-                        let mut value = struct_type.as_str();
+                        let value = struct_type.as_str();
                         let struct_name = map_type(value);
                         quote! { #struct_name }
                     }
                     Arg::Alias(alias_type) => {
-                        let mut value = alias_type.as_str();
+                        let value = alias_type.as_str();
                         // if alias_type.as_str().eq("GLenum") || alias_type.as_str().eq("GLbitfield")
                         // {
                         //     if let Some(group_name) = &cmd.group {
@@ -134,7 +154,7 @@ fn build_enum_block(collection: &HashMap<String, HashSet<APIEnum>>) -> Vec<Token
     collection
         .iter()
         .map(|(name, enums)| {
-            if (name.as_str().eq("SpecialNumbers")) {
+            if name.as_str().eq("SpecialNumbers") {
                 quote! {}
             } else {
                 let e: Vec<&APIEnum> = enums.iter().collect();
@@ -157,7 +177,7 @@ fn build_enum_type_block(collection: &HashMap<String, HashSet<APIEnum>>) -> Vec<
     collection
         .iter()
         .map(|(name, enums)| {
-            if (name.as_str().eq("SpecialNumbers")) {
+            if name.as_str().eq("SpecialNumbers") {
                 quote! {}
             } else {
                 let e: Vec<&APIEnum> = enums.iter().collect();
@@ -202,7 +222,7 @@ pub fn build_function_block(
     let return_defs: Option<TokenStream> = match &proto.def.return_arg {
         ProtoReturn::Fundamental(fund_type) => Some(map_fundamental_type(fund_type)),
         ProtoReturn::Alias(alias_type) => {
-            let mut value = alias_type.as_str();
+            let value = alias_type.as_str();
             // if alias_type.as_str().eq("GLenum") || alias_type.as_str().eq("GLbitfield") {
             //     if let Some(group_name) = &proto.group {
             //         value = group_name.as_str();
@@ -279,7 +299,6 @@ pub fn build_command_block(collection: &HashMap<String, APICommand>) -> Vec<Toke
         .collect()
 }
 
-
 pub fn write_source_code<P: AsRef<Path>>(headers_dir: &Path, src_dir: P) {
     write_gl(headers_dir, PathBuf::from(src_dir.as_ref()));
     // write_glx(headers_dir, PathBuf::from(src_dir.as_ref()));
@@ -292,7 +311,7 @@ fn write_glx(opengl_registry: &Path, output: PathBuf) {
 
     let (spec, _errors) =
         khronos_registry_parse::gl::parse_file(xml_path.as_path()).expect("invalid xml file");
-    let mut context = construct_context(&spec);
+    let context = construct_context(&spec);
 
     let unique_enums = collect_unique_enums(&context.enum_cache);
     let unique_bitfield = collect_unique_enums(&context.bitfield_cache);
@@ -426,4 +445,3 @@ fn write_wgl(opengl_registry: &Path, output: PathBuf) {
     write!(&mut enum_file, "{}", enum_code).expect("Unable to write enums.rs");
     write!(&mut command_file, "{}", command_code).expect("Unable to write command.rs");
 }
-
