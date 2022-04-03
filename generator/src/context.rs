@@ -60,7 +60,7 @@ pub enum APIName {
 }
 
 impl APIName {
-    pub fn order(a1: &APIName, a2: &APIName) -> Ordering {
+    pub fn order_same_api(a1: &APIName, a2: &APIName) -> Ordering {
         let order_major_minor = |major1, minor1, major2, minor2| -> Ordering {
             let mut order = Ord::cmp(major1, major2);
             if order == Ordering::Equal {

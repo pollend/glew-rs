@@ -4,6 +4,7 @@ mod command_parser;
 mod const_parser;
 mod context;
 mod generator;
+mod gl_command_generator;
 mod gl_generator;
 
 use generator::write_source_code;

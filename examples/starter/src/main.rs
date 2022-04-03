@@ -1,11 +1,14 @@
-use rogl::gl;
+use rogl::{enums, gl};
 use rogl::gl::context::GLContext;
-use rogl::gl::enums;
-use rogl::gl::gl45::GL45;
 use std::ffi::CStr;
 use std::ptr;
+use rogl::gl::gl45::GL45;
+use rogl::gl::gl33::GL33;
 
 use rogl::types::{GLint, GLsizeiptr, GLuint};
+
+trait GL: GL45 {}
+impl GL for GLContext {}
 
 fn main() {
     unsafe {
@@ -32,7 +35,7 @@ fn main() {
         let program = create_program(&cntx, vertex_shader_source, fragment_shader_source);
 
         // gl.use_program(Some(program));
-        GL45::glUseProgram(&cntx, program);
+        GL::glUseProgram(&cntx, program);
 
         // Create a vertex buffer and vertex array object
         let (vbo, vao) = create_vertex_buffer(&cntx);
@@ -45,7 +48,7 @@ fn main() {
             0.8,
         );
 
-        GL45::glClearColor(&cntx, 0.1, 0.2, 0.3, 1.0);
+        GL::glClearColor(&cntx, 0.1, 0.2, 0.3, 1.0);
 
         'render: loop {
             {
@@ -56,15 +59,15 @@ fn main() {
                 }
             }
 
-            GL45::glClear(&cntx, rogl::gl::bitflags::GL_COLOR_BUFFER_BIT);
-            GL45::glDrawArrays(&cntx, enums::GL_TRIANGLES, 0, 3);
+            GL::glClear(&cntx, rogl::bitflags::GL_COLOR_BUFFER_BIT);
+            GL::glDrawArrays(&cntx, enums::GL_TRIANGLES, 0, 3);
             window.gl_swap_window();
         }
 
         // Clean up
-        GL45::glDeleteProgram(&cntx, program);
-        GL45::glDeleteVertexArrays(&cntx, 1, [vao].as_ptr());
-        GL45::glDeleteBuffers(&cntx, 1, [vbo].as_ptr());
+        GL::glDeleteProgram(&cntx, program);
+        GL::glDeleteVertexArrays(&cntx, 1, [vao].as_ptr());
+        GL::glDeleteBuffers(&cntx, &[vbo]);
     }
 }
 
@@ -100,13 +103,13 @@ unsafe fn create_program<T>(
     fragment_shader_source: &[u8],
 ) -> GLuint
 where
-    T: GL45,
+    T: GL,
 {
     let program = cntx.glCreateProgram();
 
     let shader_sources = [
-        (gl::enums::GL_VERTEX_SHADER, vertex_shader_source),
-        (gl::enums::GL_FRAGMENT_SHADER, fragment_shader_source),
+        (enums::GL_VERTEX_SHADER, vertex_shader_source),
+        (enums::GL_FRAGMENT_SHADER, fragment_shader_source),
     ];
 
     let mut shaders = Vec::with_capacity(shader_sources.len());
@@ -137,7 +140,7 @@ where
 
 unsafe fn create_vertex_buffer<T>(ctx: &T) -> (GLuint, GLuint)
 where
-    T: GL45,
+    T: GL,
 {
     // This is a flat array of f32s that are to be interpreted as vec2s.
     let triangle_vertices = [0.5f32, 1.0f32, 0.0f32, 0.0f32, 1.0f32, 0.0f32];
@@ -148,7 +151,7 @@ where
 
     // We construct a buffer and upload the data
     let mut vbo_buffers: [GLuint; 1] = [0; 1];
-    ctx.glCreateBuffers(1, vbo_buffers.as_mut_ptr());
+    ctx.glCreateBuffers(&mut vbo_buffers);
     ctx.glBindBuffer(enums::GL_ARRAY_BUFFER, vbo_buffers[0]);
     ctx.glBufferData(
         enums::GL_ARRAY_BUFFER,
@@ -159,7 +162,7 @@ where
 
     // We now construct a vertex array to describe the format of the input buffer
     let mut vao_buffers: [GLuint; 1] = [0; 1];
-    ctx.glCreateVertexArrays(1, vao_buffers.as_mut_ptr());
+    ctx.glCreateVertexArrays(&mut vao_buffers);
     ctx.glBindVertexArray(vao_buffers[0]);
     ctx.glEnableVertexAttribArray(0);
     ctx.glVertexAttribPointer(0, 2, enums::GL_FLOAT, 0, 8, ptr::null());
@@ -169,7 +172,7 @@ where
 
 unsafe fn set_uniform<T>(gl: &T, program: GLuint, name: &CStr, value: f32)
 where
-    T: GL45,
+    T: GL,
 {
     let uniform_location = gl.glGetUniformLocation(program, name.as_ptr());
     gl.glUniform1f(uniform_location, value);

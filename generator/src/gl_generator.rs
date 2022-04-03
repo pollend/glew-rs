@@ -3,24 +3,16 @@ use khronos_registry_parse::gl::{
     Command, CommandParam, Enum, Enums, EnumsChild, ExtensionChild, InterfaceItem, Registry,
     RegistryChild,
 };
-
 use nom::error::ParseError;
-
-use std::cmp::Ordering;
-
 use nom::Parser;
-use quote::{format_ident, quote, ToTokens};
-
-use std::collections::{HashMap, HashSet};
-use std::fmt::format;
-
 use proc_macro2::{Span, TokenStream};
+use quote::{format_ident, quote, ToTokens};
+use std::cmp::Ordering;
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::fmt::format;
 use std::fs::File;
-
 use std::io::Write;
-
 use std::path::{Path, PathBuf};
-
 use syn::spanned::Spanned;
 
 use crate::context::{
@@ -28,6 +20,7 @@ use crate::context::{
     APIName, APIProto, Context,
 };
 use crate::generator::{build_command_block, build_function_block, construct_field_block};
+use crate::gl_command_generator::construct_method_block;
 use syn::LitByteStr;
 
 fn build_api_load_block<'a>(
@@ -84,49 +77,10 @@ fn construct_features<'a>(features: impl Iterator<Item = &'a str>) -> TokenStrea
     }
 }
 
-fn construct_method_block<'a>(
-    cmds: impl Iterator<Item = &'a str>,
-    mut get_api_command: impl FnMut(&'a str) -> &'a APICommand,
-) -> Vec<TokenStream> {
-    let mut method_block: Vec<TokenStream> = vec![];
-    for cmd in cmds {
-        let command = get_api_command(cmd);
-        let api_name = format_ident!("{}", cmd);
-        let (arg_block, return_block) =
-            build_function_block(&command.proto, command.arguments.as_slice());
-        let args: Vec<TokenStream> = command
-            .arguments
-            .iter()
-            .map(|p| {
-                let name = format_ident!("_{}", p.name.as_str());
-                quote! { #name }
-            })
-            .collect();
-
-        method_block.push(match return_block {
-            None => {
-                quote! {
-                    unsafe fn #api_name(&self,#arg_block) {
-                         (self.entry().#api_name)(#(#args,)*)
-                    }
-                }
-            }
-            Some(return_block) => {
-                quote! {
-                     unsafe fn #api_name(&self,#arg_block) -> #return_block{
-                        (self.entry().#api_name)(#(#args,)*)
-                    }
-                }
-            }
-        })
-    }
-    method_block
-}
-
 #[derive(Clone, PartialEq, Eq)]
 struct APIDetails<'a, 'b> {
     name: &'a APIName,
-    commands: &'b HashSet<String>,
+    commands: &'b BTreeSet<String>,
 }
 
 pub fn build_features<'a>(
@@ -134,7 +88,7 @@ pub fn build_features<'a>(
     apis: impl Iterator<Item = &'a APIName>,
     mut handler: impl FnMut(APIDetails),
 ) {
-    let mut temp_commands: HashSet<String> = HashSet::default();
+    let mut temp_commands: BTreeSet<String> = BTreeSet::default();
     apis.for_each(|api| {
         let feature = &context.feature_cache[api];
         for extension in &feature.groups {
@@ -190,7 +144,7 @@ pub fn write_gles(context: &Context, output: &PathBuf) {
                 }
                 return None;
             })
-            .sorted_by(|it1, it2| APIName::order(it1, it2))
+            .sorted_by(|it1, it2| APIName::order_same_api(it1, it2))
             .into_iter(),
         |details| {
             if let APIName::GLES { major, minor } = details.name {
@@ -201,15 +155,18 @@ pub fn write_gles(context: &Context, output: &PathBuf) {
                         .insert(format!("gles{}{}", *major, *minor));
                 }
 
-                let mut method_block: Vec<TokenStream> =
-                    construct_method_block(details.commands.iter().map(|i| i.as_str()), |c| {
-                        &context.command_cache[c]
-                    });
+                let mut method_block: Vec<TokenStream> = construct_method_block(
+                    details.name,
+                    details.commands.iter().map(|i| i.as_str()),
+                    |c| &context.command_cache[c],
+                );
                 let api_name = format_ident!("GLES{}{}", *major, *minor);
 
                 let function_codes = quote! {
                     use crate::types::*;
                     use crate::gles::feature::EntryGLESFn;
+                    use std::mem;
+
 
                     pub trait #api_name {
                         unsafe fn entry(&self) -> &EntryGLESFn;
@@ -239,7 +196,7 @@ pub fn write_gles(context: &Context, output: &PathBuf) {
                 }
                 return None;
             })
-            .sorted_by(|it1, it2| APIName::order(it1, it2))
+            .sorted_by(|it1, it2| APIName::order_same_api(it1, it2))
             .into_iter(),
         |details| {
             if let APIName::GLES2 { major, minor } = details.name {
@@ -250,15 +207,17 @@ pub fn write_gles(context: &Context, output: &PathBuf) {
                         .insert(format!("gles{}{}", *major, *minor));
                 }
 
-                let mut method_block: Vec<TokenStream> =
-                    construct_method_block(details.commands.iter().map(|i| i.as_str()), |c| {
-                        &context.command_cache[c]
-                    });
+                let mut method_block: Vec<TokenStream> = construct_method_block(
+                    details.name,
+                    details.commands.iter().map(|i| i.as_str()),
+                    |c| &context.command_cache[c],
+                );
                 let api_name = format_ident!("GLES{}{}", *major, *minor);
 
                 let function_codes = quote! {
                     use crate::types::*;
                     use crate::gles::feature::EntryGLESFn;
+                    use std::mem;
 
                     pub trait #api_name {
                         unsafe fn entry(&self) -> &EntryGLESFn;
@@ -336,7 +295,6 @@ pub fn write_opengl(context: &Context, output: &PathBuf) {
     };
 
     let mut cmd_features: HashMap<String, HashSet<String>> = HashMap::default();
-
     build_features(
         &context,
         context
@@ -348,7 +306,7 @@ pub fn write_opengl(context: &Context, output: &PathBuf) {
                 }
                 return None;
             })
-            .sorted_by(|it1, it2| APIName::order(it1, it2))
+            .sorted_by(|it1, it2| APIName::order_same_api(it1, it2))
             .into_iter(),
         |details| {
             if let APIName::OPENGL { major, minor } = details.name {
@@ -359,15 +317,18 @@ pub fn write_opengl(context: &Context, output: &PathBuf) {
                         .insert(format!("gl{}{}", *major, *minor));
                 }
 
-                let mut method_block: Vec<TokenStream> =
-                    construct_method_block(details.commands.iter().map(|i| i.as_str()), |c| {
-                        &context.command_cache[c]
-                    });
+                let mut method_block: Vec<TokenStream> = construct_method_block(
+                    details.name,
+                    details.commands.iter().map(|i| i.as_str()),
+                    |c| &context.command_cache[c],
+                );
                 let api_name = format_ident!("GL{}{}", *major, *minor);
 
                 let function_codes = quote! {
                     use crate::types::*;
                     use crate::gl::feature::EntryGLFn;
+                    use std::mem;
+
 
                     pub trait #api_name {
                         unsafe fn entry(&self) -> &EntryGLFn;

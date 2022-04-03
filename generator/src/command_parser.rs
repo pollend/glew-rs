@@ -58,6 +58,9 @@ pub enum PointerType {
 
 #[test]
 fn parser_test_fundamental_type() {
+    use nom::error::VerboseError;
+    use nom::Finish;
+
     let test_valid = |string: &str, type_expect: FundamentalType| {
         let value = parse_fundamental_type::<VerboseError<&str>>(string);
         let result = value.finish();
@@ -249,6 +252,9 @@ fn parse_fundamental_type<'a, E: ParseError<&'a str>>(
 
 #[test]
 fn parser_test_pointer_type() {
+    use nom::error::VerboseError;
+    use nom::Finish;
+
     let test_valid = |string: &str, type_expect: &[PointerType]| {
         let value = parse_pointer_definition::<VerboseError<&str>>(string);
         let result = value.finish();
@@ -289,6 +295,9 @@ fn parse_const<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str, &'a s
 
 #[test]
 fn parser_test_argument() {
+    use nom::error::VerboseError;
+    use nom::Finish;
+
     let arg = |string: &str, def: ArgumentDef| {
         println!("{}", string);
         let value = parse_argument::<VerboseError<&str>>(string);
